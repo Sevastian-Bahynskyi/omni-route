@@ -114,6 +114,15 @@ exec python3 "${BASE}/configure_subscriptions.py" "\$@"
 EOF_ACCOUNTS
 chmod +x "${BIN}/omni-rotate-accounts"
 
+cp "${HERE}/status_server.py" "${BASE}/status_server.py"
+chmod 700 "${BASE}/status_server.py"
+
+cat > "${BIN}/omni-rotate-status" <<EOF_STATUS
+#!/bin/sh
+exec python3 "${BASE}/status_server.py" "\$@"
+EOF_STATUS
+chmod +x "${BIN}/omni-rotate-status"
+
 rm -rf "${SRC}.previous"
 trap - EXIT
 
@@ -123,5 +132,7 @@ echo "INSTALL COMPLETE"
 echo "============================================================"
 echo "Run patched Omnigent with:"
 echo "  ${BIN}/omni-rotate codex"
+echo "Read-only status dashboard:"
+echo "  ${BIN}/omni-rotate-status"
 echo
 echo "Your existing normal 'omni' installation was NOT modified."
