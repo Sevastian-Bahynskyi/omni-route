@@ -1,0 +1,8 @@
+Omni Route / Omnigent Subscription Rotation v1.1
+Pinned Omnigent commit: 2b13f2d7d85431c06e510d3c707c0c6d9a191a44
+Routing: any number of Codex subscription accounts -> optional Claude Pro fallback
+Setup: interactive `codex` / `claude` / `done` configurator
+Auth: official Codex/Claude CLI subscription OAuth; no API-key fallback
+macOS installer: install.sh
+Runtime launcher: ~/.local/bin/omni-rotate
+Subscription configurator: ~/.local/bin/omni-rotate-accounts
