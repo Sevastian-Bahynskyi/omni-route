@@ -62,7 +62,7 @@ case "$command_name" in
       fi
       exit 0
     fi
-    exec "${BASE}/omnigent/.venv/bin/python" -S "${BASE}/status_server_ext.py" "$@"
+    exec "${BASE}/omnigent/.venv/bin/python" "${BASE}/status_server_ext.py" "$@"
     ;;
   accounts|account|subscriptions|configure)
     shift

@@ -112,6 +112,7 @@ python3 "${HERE}/import_sessions.py" --self-test
 python3 -m py_compile \
   "${HERE}/status_server.py" \
   "${HERE}/status_server_ext.py" \
+  "${HERE}/account_usage.py" \
   "${HERE}/remote_access.py" \
   "${HERE}/switch_provider.py" \
   "${HERE}/import_sessions.py"
@@ -139,6 +140,7 @@ cp "${HERE}/configure_subscriptions.py" "${BASE}/configure_subscriptions.py"
 cp "${HERE}/diagnose.py" "${BASE}/diagnose.py"
 cp "${HERE}/status_server.py" "${BASE}/status_server.py"
 cp "${HERE}/status_server_ext.py" "${BASE}/status_server_ext.py"
+cp "${HERE}/account_usage.py" "${BASE}/account_usage.py"
 cp "${HERE}/remote_access.py" "${BASE}/remote_access.py"
 cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
 cp "${HERE}/switch_provider.py" "${BASE}/switch_provider.py"
@@ -149,6 +151,7 @@ chmod 700 \
   "${BASE}/diagnose.py" \
   "${BASE}/status_server.py" \
   "${BASE}/status_server_ext.py" \
+  "${BASE}/account_usage.py" \
   "${BASE}/remote_access.py" \
   "${BASE}/dashboard.html" \
   "${BASE}/switch_provider.py" \
@@ -209,12 +212,35 @@ echo
 echo "Your existing normal 'omni' installation was NOT modified."
 echo "Tailscale is installed for optional tailnet-only dashboard access; sign in to Tailscale before enabling it in the dashboard."
 
-# Keep the dashboard available after the installer exits. If a dashboard is
-# already serving on the default port, reuse it; otherwise start one detached.
+# Keep the dashboard available after the installer and terminal exit.
 DASHBOARD_URL="http://127.0.0.1:8787/"
 pkill -f "${BASE}/status_server_ext.py" >/dev/null 2>&1 || true
 pkill -f "${BASE}/status_server.py" >/dev/null 2>&1 || true
-nohup "${BIN}/omni-rotate" status --no-open >"${BASE}/status-dashboard.log" 2>&1 </dev/null &
-sleep 0.7
+LAUNCH_AGENTS="${HOME}/Library/LaunchAgents"
+DASHBOARD_PLIST="${LAUNCH_AGENTS}/com.seva.omni-route-dashboard.plist"
+mkdir -p "${LAUNCH_AGENTS}"
+cat >"${DASHBOARD_PLIST}" <<EOF_DASHBOARD_PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.seva.omni-route-dashboard</string>
+  <key>ProgramArguments</key><array>
+    <string>${SRC}/.venv/bin/python</string>
+    <string>${BASE}/status_server_ext.py</string>
+    <string>--no-open</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>${HOME}</string>
+    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${BASE}/status-dashboard.log</string>
+  <key>StandardErrorPath</key><string>${BASE}/status-dashboard.log</string>
+</dict></plist>
+EOF_DASHBOARD_PLIST
+launchctl bootout "gui/$(id -u)" "${DASHBOARD_PLIST}" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "${DASHBOARD_PLIST}"
+sleep 1
 echo "Opening Omni Route dashboard: ${DASHBOARD_URL}"
 open "${DASHBOARD_URL}" >/dev/null 2>&1 || true

@@ -62,7 +62,7 @@ def patch_orchestration(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
 
     anchor = '''    bridge_dir = prepare_bridge_dir(session_id)\n    socket_path = socket_path_for_bridge_dir(bridge_dir)\n    codex_home = codex_home_for_bridge_dir(bridge_dir)\n'''
-    insertion = anchor + '''    from omnigent.codex_account_pool import CodexAccountPool\n\n    _account_pool = CodexAccountPool.from_default()\n    _account_profile = (\n        _account_pool.account_for_session(session_id)\n        if _account_pool.enabled\n        else None\n    )\n    if _account_pool.enabled and _account_profile is None:\n        raise RuntimeError(\n            "All configured subscription accounts are currently unavailable."\n        )\n'''
+    insertion = anchor + '''    from omnigent.codex_account_pool import CodexAccountPool\n\n    _account_pool = CodexAccountPool.from_default()\n    _account_profile = (\n        _account_pool.account_for_session(session_id, provider="codex")\n        if _account_pool.enabled\n        else None\n    )\n    if _account_pool.enabled and _account_profile is None:\n        raise RuntimeError(\n            "All configured Codex subscription accounts are currently unavailable."\n        )\n'''
     insertion += '    if _account_profile is not None and _account_profile.provider != "codex":\n        raise RuntimeError("Selected account requires the Claude provider; restart through omni-route.")\n'
     text = replace_once(text, anchor, insertion, "select pooled Codex account")
 
@@ -109,7 +109,7 @@ def patch_claude_orchestration(path: Path) -> None:
     from omnigent.codex_native_bridge import bridge_dir_for_bridge_id as _account_bridge_dir
 
     _account_pool = CodexAccountPool.from_default()
-    _account_profile = _account_pool.account_for_session(session_id) if _account_pool.enabled else None
+    _account_profile = _account_pool.account_for_session(session_id, provider="claude") if _account_pool.enabled else None
     if _account_pool.enabled and _account_profile is None:
         raise RuntimeError("All configured subscription accounts are currently unavailable.")
     if _account_profile is not None and _account_profile.provider != "claude":

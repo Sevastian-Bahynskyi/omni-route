@@ -126,7 +126,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self._post(server, "/api/provider/current", {"provider": "unknown"}, origin), 400)
             switch.assert_not_called()
             self.assertEqual(self._post(server, "/api/provider/current", {"provider": "claude-2"}, origin), 200)
-            switch.assert_called_once_with("claude-2")
+            switch.assert_called_once_with("claude-2", None)
 
 
 if __name__ == "__main__":

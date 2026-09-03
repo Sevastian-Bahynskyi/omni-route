@@ -26,6 +26,17 @@ class RoutingTests(unittest.TestCase):
 
     def test_mixed_order_cooldown_and_recovery(self) -> None:
         self.assertEqual(self.pool.account_for_session('s'), self.a)
+
+    def test_new_session_selects_first_account_for_requested_provider(self) -> None:
+        self.assertEqual(self.pool.account_for_session('claude-session', provider='claude'), self.b)
+        self.assertEqual(self.pool.account_for_session('codex-session', provider='codex'), self.a)
+
+    def test_requested_provider_rebinds_an_incompatible_session(self) -> None:
+        self.assertEqual(self.pool.account_for_session('switching-agent'), self.a)
+        self.assertEqual(
+            self.pool.account_for_session('switching-agent', provider='claude'),
+            self.b,
+        )
         self.assertEqual(self.pool.rotate_session('s', exhausted_account=self.a.name, retry_at=2000, reason='quota'), self.b)
         self.assertEqual(self.pool.rotate_session('s', exhausted_account=self.b.name, retry_at=2000, reason='quota'), self.c)
         self.assertIsNone(self.pool.rotate_session('s', exhausted_account=self.c.name, retry_at=2000, reason='quota'))

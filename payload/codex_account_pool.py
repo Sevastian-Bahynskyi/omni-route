@@ -143,7 +143,12 @@ class CodexAccountPool:
                 problems.append(f"{account.name}: missing/unusable {account.auth_json}")
         return problems
 
-    def account_for_session(self, session_id: str) -> AccountProfile | None:
+    def account_for_session(
+        self,
+        session_id: str,
+        *,
+        provider: str | None = None,
+    ) -> AccountProfile | None:
         if not self.enabled:
             return None
         now = int(self._now())
@@ -153,9 +158,14 @@ class CodexAccountPool:
             bound = bindings.get(session_id)
             if isinstance(bound, str):
                 profile = self._by_name(bound)
-                if profile is not None and account_has_credential(profile) and self._available(state, bound, now):
+                if (
+                    profile is not None
+                    and (provider is None or profile.provider == provider)
+                    and account_has_credential(profile)
+                    and self._available(state, bound, now)
+                ):
                     return profile
-            account = self._choose(state, now)
+            account = self._choose(state, now, provider=provider)
             if account is None:
                 bindings.pop(session_id, None)
                 return None
@@ -191,11 +201,20 @@ class CodexAccountPool:
     def _by_name(self, name: str) -> AccountProfile | None:
         return next((a for a in self.config.accounts if a.name == name), None)
 
-    def _choose(self, state: dict[str, Any], now: int, *, exclude: set[str] | None = None) -> AccountProfile | None:
+    def _choose(
+        self,
+        state: dict[str, Any],
+        now: int,
+        *,
+        exclude: set[str] | None = None,
+        provider: str | None = None,
+    ) -> AccountProfile | None:
         """Choose the first available account in configured route order."""
         exclude = exclude or set()
         for profile in self.config.accounts:
             if profile.name in exclude:
+                continue
+            if provider is not None and profile.provider != provider:
                 continue
             if account_has_credential(profile) and self._available(state, profile.name, now):
                 return profile
