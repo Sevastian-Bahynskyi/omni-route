@@ -84,6 +84,35 @@ The normal CLI remains available separately as:
 omni
 ```
 
+## Read-only status dashboard
+
+Start the local dashboard with:
+
+```bash
+~/.local/bin/omni-rotate-status
+```
+
+It opens `http://127.0.0.1:8787/` and refreshes every two seconds. The page has a
+minimal black/green terminal-style UI and shows:
+
+- configured Codex accounts and their order;
+- current/ready/cooldown/missing-auth state;
+- cooldown reset countdowns when known;
+- current active account and rotation threshold;
+- Claude fallback configuration/auth status;
+- patched runtime, normal `omni` CLI, and Desktop app presence.
+
+The server binds only to `127.0.0.1`, exposes only GET/HEAD endpoints, returns
+HTTP 405 for write methods, and does not return OAuth/JWT contents, account auth
+file paths, or other credential data.
+
+Options:
+
+```bash
+~/.local/bin/omni-rotate-status --no-open
+~/.local/bin/omni-rotate-status --port 8899
+```
+
 ## Routing behavior
 
 The Codex accounts are tried in the order they were registered. Before a fresh
