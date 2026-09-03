@@ -42,7 +42,6 @@ pkill -f '/Omnigent[^/]*/Contents/MacOS/' >/dev/null 2>&1 || true
 pkill -f "$HOME/.local/share/omnigent-subscription-rotation/omnigent" >/dev/null 2>&1 || true
 sleep 1
 
-# Capture Desktop bundle identifiers before deleting the app bundle.
 bundle_ids=()
 for app in /Applications/Omnigent*.app "$HOME"/Applications/Omnigent*.app; do
   [[ -d "$app" ]] || continue
@@ -54,8 +53,6 @@ for app in /Applications/Omnigent*.app "$HOME"/Applications/Omnigent*.app; do
   fi
 done
 
-# Use Omnigent's own current uninstaller first. Full manual cleanup follows,
-# so a broken/missing CLI cannot leave the machine half-cleaned.
 echo "Running official Omnigent cleanup..."
 set +e
 curl -fsSL https://raw.githubusercontent.com/omnigent-ai/omnigent/main/scripts/uninstall_oss.sh \
@@ -67,7 +64,6 @@ if [[ $uninstall_rc -ne 0 ]]; then
   echo "Official uninstaller returned ${uninstall_rc}; continuing with forced local cleanup."
 fi
 
-# Remove alternate CLI installation shapes if they exist.
 if command -v uv >/dev/null 2>&1; then
   uv tool uninstall omnigent >/dev/null 2>&1 || true
 fi
@@ -77,15 +73,14 @@ if command -v brew >/dev/null 2>&1; then
 fi
 rm -f "$HOME/.local/bin/omni" "$HOME/.local/bin/omnigent"
 
-# Remove Omni Route launchers/runtime and every Omnigent state directory.
 rm -f \
   "$HOME/.local/bin/omni-rotate" \
   "$HOME/.local/bin/omni-rotate-accounts" \
+  "$HOME/.local/bin/omni-rotate-test" \
   "$HOME/.local/bin/omni-rotate-status"
 rm -rf "$HOME/.local/share/omnigent-subscription-rotation"
 rm -rf "$HOME/.omnigent" "$HOME/.omnigent-backups" "$HOME/omnigent"
 
-# Remove Desktop app bundles. Use sudo only for system Applications when needed.
 for app in /Applications/Omnigent*.app; do
   [[ -e "$app" ]] || continue
   sudo rm -rf "$app"
@@ -95,8 +90,6 @@ for app in "$HOME"/Applications/Omnigent*.app; do
   rm -rf "$app"
 done
 
-# Belt-and-suspenders Desktop data cleanup. The official desktop-data target
-# handles its known paths; these cover standard macOS bundle/product locations.
 rm -rf \
   "$HOME/Library/Application Support/Omnigent" \
   "$HOME/Library/Caches/Omnigent" \
@@ -118,7 +111,6 @@ for bundle_id in "${bundle_ids[@]}"; do
     "$HOME/Library/Application Scripts/${bundle_id}"
 done
 
-# Remove this repository only when we can prove it is the Omni Route checkout.
 remove_repo=false
 if [[ -d "$HERE/.git" ]]; then
   origin="$(git -C "$HERE" remote get-url origin 2>/dev/null || true)"
