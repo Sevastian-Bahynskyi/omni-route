@@ -51,6 +51,15 @@ case "$command_name" in
     ;;
   status|dashboard)
     shift
+    if { [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--no-open" ]; }; } \
+      && command -v curl >/dev/null 2>&1 \
+      && curl -fsS "http://127.0.0.1:8787/api/status" >/dev/null 2>&1; then
+      echo "Omni Route dashboard: http://127.0.0.1:8787/"
+      if [ "$#" -eq 0 ]; then
+        open "http://127.0.0.1:8787/" >/dev/null 2>&1 || true
+      fi
+      exit 0
+    fi
     exec python3 -S "${BASE}/status_server.py" "$@"
     ;;
   accounts|account|subscriptions|configure)
