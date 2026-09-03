@@ -66,18 +66,48 @@ def _connection() -> tuple[bool, str, str | None, str | None]:
     dns_name = dns_name.rstrip(".") if isinstance(dns_name, str) and dns_name.strip() else None
     online = self_info.get("Online")
     connected = backend.casefold() == "running" and online is not False
-    return connected, backend, dns_name, None if connected else f"Backend state: {backend}"
+    if connected:
+        return True, "connected", dns_name, None
+    backend_key = backend.casefold().replace("_", "").replace("-", "")
+    state = "needs_login" if backend_key in {"needslogin", "nologin"} else "offline"
+    return False, state, dns_name, f"Backend state: {backend}"
 
 
-def _serve_enabled() -> bool:
+def _serve_state() -> tuple[bool, bool]:
+    """Return (our_dashboard_enabled, https_port_in_use)."""
+    result = _run("serve", "status", "--json")
+    if result is not None and result.returncode == 0:
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            port_in_use = False
+            web_maps: list[dict[str, Any]] = []
+            web = payload.get("Web")
+            if isinstance(web, dict):
+                web_maps.append(web)
+            services = payload.get("Services")
+            if isinstance(services, dict):
+                for service in services.values():
+                    if isinstance(service, dict) and isinstance(service.get("Web"), dict):
+                        web_maps.append(service["Web"])
+            for web_map in web_maps:
+                for host_port, config in web_map.items():
+                    if not isinstance(host_port, str) or not host_port.endswith(f":{TAILSCALE_HTTPS_PORT}"):
+                        continue
+                    port_in_use = True
+                    if DASHBOARD_TARGET in json.dumps(config, separators=(",", ":")):
+                        return True, True
+            if port_in_use:
+                return False, True
+
     result = _run("serve", "status")
     if result is None or result.returncode != 0:
-        return False
+        return False, False
     text = result.stdout
-    return (
-        DASHBOARD_TARGET in text
-        and (f":{TAILSCALE_HTTPS_PORT}" in text or f"https={TAILSCALE_HTTPS_PORT}" in text)
-    )
+    port_in_use = f":{TAILSCALE_HTTPS_PORT}" in text
+    return DASHBOARD_TARGET in text and port_in_use, port_in_use
 
 
 def status() -> dict[str, Any]:
@@ -92,12 +122,17 @@ def status() -> dict[str, Any]:
             "detail": "Tailscale is not installed",
         }
     connected, state, dns_name, detail = _connection()
+    enabled, port_in_use = _serve_state()
+    conflict = port_in_use and not enabled
+    if conflict and detail is None:
+        detail = f"Tailscale HTTPS port {TAILSCALE_HTTPS_PORT} is already used by another Serve target"
     url = f"https://{dns_name}:{TAILSCALE_HTTPS_PORT}/" if dns_name else None
     return {
         "installed": True,
         "connected": connected,
         "connectionState": state,
-        "enabled": connected and _serve_enabled(),
+        "enabled": enabled,
+        "portConflict": conflict,
         "url": url,
         "detail": detail,
     }
@@ -113,6 +148,14 @@ def enable() -> dict[str, Any]:
             "error": "Tailscale is installed but not connected. Sign in/connect Tailscale first.",
             "remoteAccess": before,
         }
+    if before.get("portConflict"):
+        return {
+            "ok": False,
+            "error": f"Tailscale HTTPS port {TAILSCALE_HTTPS_PORT} is already used by another Serve target.",
+            "remoteAccess": before,
+        }
+    if before["enabled"]:
+        return {"ok": True, "remoteAccess": before}
     result = _run(
         "serve",
         "--bg",
@@ -132,9 +175,9 @@ def enable() -> dict[str, Any]:
 
 def disable() -> dict[str, Any]:
     before = status()
-    if not before["installed"]:
+    if not before["installed"] or not before["enabled"]:
         return {"ok": True, "remoteAccess": before}
-    result = _run("serve", f"--https={TAILSCALE_HTTPS_PORT}", "off", timeout=20.0)
+    result = _run("serve", "--yes", f"--https={TAILSCALE_HTTPS_PORT}", "off", timeout=20.0)
     after = status()
     if not after["enabled"]:
         return {"ok": True, "remoteAccess": after}
