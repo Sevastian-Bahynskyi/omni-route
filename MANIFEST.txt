@@ -5,6 +5,7 @@ Setup: interactive `codex` / `claude` / `done` configurator
 Auth: official Codex/Claude CLI subscription OAuth; no API-key fallback
 Omni Route installer: install.sh
 Full macOS installer (normal CLI + Desktop + Omni Route): install_all.sh
+Read-only localhost status dashboard: status_server.py -> ~/.local/bin/omni-rotate-status
 Omni Route-only uninstaller: uninstall.sh
 Full macOS cleanup (CLI + Desktop + state + Omni Route + repo): uninstall_all.sh
 Runtime launcher: ~/.local/bin/omni-rotate
