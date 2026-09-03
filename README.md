@@ -19,6 +19,10 @@ cd omni-route
 required shared dependencies when missing, and Omni Route. `install.sh` can be
 used when normal Omnigent/Desktop are already present.
 
+Tailscale is installed automatically when missing so secure remote dashboard
+access is available without a separate install step. Tailscale account sign-in
+and connection are still explicit user actions.
+
 During account setup, enter `codex` once per Codex subscription, optionally
 `claude`, then `done`.
 
@@ -58,6 +62,20 @@ without changing route priority:
 
 A stopped/resumable Codex session can also have its next Codex account selected;
 the binding is used when that session resumes.
+
+### Optional Tailscale remote access
+
+The **Remote Access** section shows Tailscale connection state and can enable or
+disable a tailnet-only HTTPS proxy to the existing local dashboard. Enabling it
+runs Tailscale Serve on dedicated HTTPS port `8443` and shows the generated
+`https://<device>.<tailnet>.ts.net:8443/` URL with a **Copy Link** action.
+
+The dashboard server itself continues listening only on `127.0.0.1:8787`.
+Tailscale terminates HTTPS and forwards authenticated tailnet traffic to that
+loopback service. Omni Route does not use Tailscale Funnel and does not expose
+the dashboard to the public internet. If port `8443` is already used by another
+Tailscale Serve target, Omni Route reports the conflict instead of overwriting
+that configuration.
 
 ## Session history import
 
@@ -110,4 +128,4 @@ Full Omnigent + Desktop + Omni Route cleanup:
 ```
 
 The full cleanup keeps unrelated shared tools such as Homebrew, Git, `uv`,
-`tmux`, Node, Codex CLI and Claude CLI.
+`tmux`, Node, Codex CLI, Claude CLI and Tailscale.
