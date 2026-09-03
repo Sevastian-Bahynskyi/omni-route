@@ -1,17 +1,19 @@
 Omni Route / Omnigent Subscription Rotation v1.1
 Pinned Omnigent commit: 2b13f2d7d85431c06e510d3c707c0c6d9a191a44
-Routing: any number of Codex subscription accounts -> optional Claude Pro fallback
+Routing: ordered Codex subscription accounts -> optional Claude Pro fallback
 Setup: interactive `codex` / `claude` / `done` configurator
 Auth: official Codex/Claude CLI subscription OAuth; no API-key fallback
 Primary command: omni-rotate
-Subcommands: omni-rotate codex | test | status | accounts
+Subcommands: omni-rotate start | test | status | accounts
+Compatibility: omni-rotate codex -> omni-rotate start
 PATH integration: managed shell profile block + Homebrew-bin shim
 Dispatcher source: omni_rotate.sh
 PATH helper source: path_helpers.sh
-Omni Route installer: install.sh
+Omni Route installer: install.sh (opens dashboard after successful install)
 Full macOS installer: install_all.sh
-Read-only diagnostics: diagnose.py
-Local Matrix status + diagnostic terminal: status_server.py + dashboard.html
+Diagnostics: diagnose.py
+Interactive Matrix route dashboard: status_server.py + dashboard.html
+Route editing: drag Codex accounts to persist priority order
 Compatibility aliases: omni-rotate-test | omni-rotate-status | omni-rotate-accounts
 Omni Route-only uninstaller: uninstall.sh
 Full macOS cleanup: uninstall_all.sh
