@@ -10,7 +10,7 @@ usage() {
 Omni Route
 
 Usage:
-  omni-rotate start [args...]     Start the routed session (Codex pool -> Claude fallback)
+  omni-rotate start [args...]     Start the routed session (ordered Codex + Claude accounts)
   omni-rotate test                Run full diagnostics
   omni-rotate status [args...]    Open the local route dashboard
   omni-rotate accounts            Add/configure subscription accounts
@@ -45,7 +45,7 @@ case "$command_name" in
   start|run|route|codex)
     shift
     require_runtime
-    exec "$PATCHED_OMNI" codex "$@"
+    exec "${BASE}/omnigent/.venv/bin/python" "${BASE}/routed_start.py" "$@"
     ;;
   test|doctor|diagnose)
     shift

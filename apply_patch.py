@@ -62,7 +62,8 @@ def patch_orchestration(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
 
     anchor = '''    bridge_dir = prepare_bridge_dir(session_id)\n    socket_path = socket_path_for_bridge_dir(bridge_dir)\n    codex_home = codex_home_for_bridge_dir(bridge_dir)\n'''
-    insertion = anchor + '''    from omnigent.codex_account_pool import CodexAccountPool\n\n    _account_pool = CodexAccountPool.from_default()\n    _account_profile = (\n        _account_pool.account_for_session(session_id)\n        if _account_pool.enabled\n        else None\n    )\n    if _account_pool.enabled and _account_profile is None:\n        raise RuntimeError(\n            "All configured Codex subscription accounts are currently unavailable."\n        )\n'''
+    insertion = anchor + '''    from omnigent.codex_account_pool import CodexAccountPool\n\n    _account_pool = CodexAccountPool.from_default()\n    _account_profile = (\n        _account_pool.account_for_session(session_id)\n        if _account_pool.enabled\n        else None\n    )\n    if _account_pool.enabled and _account_profile is None:\n        raise RuntimeError(\n            "All configured subscription accounts are currently unavailable."\n        )\n'''
+    insertion += '    if _account_profile is not None and _account_profile.provider != "codex":\n        raise RuntimeError("Selected account requires the Claude provider; restart through omni-route.")\n'
     text = replace_once(text, anchor, insertion, "select pooled Codex account")
 
     text = replace_once(
@@ -96,6 +97,89 @@ def patch_orchestration(path: Path) -> None:
     new_end = '''    if ensure_comment_relay is not None:\n        await ensure_comment_relay(session_id, explicit_bridge_dir=bridge_dir, await_notify=False)\n\n    if _account_profile is not None:\n        from omnigent.codex_account_rotation import ensure_rotation_monitor\n\n        async def _relaunch_for_account_rotation() -> None:\n            terminal_registry = resource_registry.terminal_registry\n            if terminal_registry is not None:\n                await terminal_registry.close(session_id, "codex", "main")\n            await _auto_create_codex_terminal(\n                session_id,\n                resource_registry,\n                publish_event,\n                bundle_dir=bundle_dir,\n                skills_filter=skills_filter,\n                agent_spec=agent_spec,\n                server_client=server_client,\n                ensure_comment_relay=ensure_comment_relay,\n            )\n\n        ensure_rotation_monitor(\n            session_id=session_id,\n            bridge_dir=bridge_dir,\n            pool=_account_pool,\n            server_client=server_client,\n            relaunch=_relaunch_for_account_rotation,\n        )\n\n    _logger.info(\n        "Auto-created codex terminal + forwarder for session %s",\n        session_id,\n    )\n    return terminal_view\n'''
     text = replace_once(text, old_end, new_end, "start account rotation monitor")
 
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_claude_orchestration(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    anchor = '    claude_config: ClaudeNativeUcodeConfig | None = None\n'
+    insert = """
+    from omnigent.codex_account_pool import CodexAccountPool
+    from omnigent.claude_account_integration import prepare_account_environment
+    from omnigent.codex_native_bridge import bridge_dir_for_bridge_id as _account_bridge_dir
+
+    _account_pool = CodexAccountPool.from_default()
+    _account_profile = _account_pool.account_for_session(session_id) if _account_pool.enabled else None
+    if _account_pool.enabled and _account_profile is None:
+        raise RuntimeError("All configured subscription accounts are currently unavailable.")
+    if _account_profile is not None and _account_profile.provider != "claude":
+        raise RuntimeError("Selected subscription account requires a different provider.")
+""" + anchor
+    text = replace_once(text, anchor, insert, "select pooled Claude account")
+    text = replace_once(text, "        if resolve_launch_config is not None:\n", "        if _account_profile is not None:\n            claude_config = None\n        elif resolve_launch_config is not None:\n", "use subscription Claude authentication")
+    anchor = '    claude_terminal_env_unset = _claude_terminal_env_unset(claude_config)\n'
+    insert = anchor + """    _account_env = build_native_claude_terminal_env(claude_config)
+    if _account_profile is not None:
+        _account_env, _account_unset = prepare_account_environment(_account_profile, _account_env)
+        claude_terminal_env_unset = list(set(claude_terminal_env_unset + _account_unset))
+"""
+    text = replace_once(text, anchor, insert, "select pooled Claude account")
+    text = replace_once(text, '        env=build_native_claude_terminal_env(claude_config),\n', '        env=_account_env,\n', "isolate Claude account environment")
+    anchor = '    _register_auto_forwarder_task(session_id, _forwarder_task)\n    _logger.info(\n        "Auto-created claude terminal + forwarder for session %s; "'
+    insert = """    _register_auto_forwarder_task(session_id, _forwarder_task)
+    if _account_profile is not None:
+        from omnigent.codex_account_pool import record_runtime_account
+        from omnigent.codex_account_rotation import ensure_rotation_monitor
+
+        _runtime_bridge = _account_bridge_dir(session_id)
+        record_runtime_account(_runtime_bridge, session_id=session_id,
+                               account_name=_account_profile.name, provider="claude")
+
+        async def _relaunch_for_account_rotation() -> None:
+            terminal_registry = resource_registry.terminal_registry
+            if terminal_registry is not None:
+                await terminal_registry.close(session_id, "claude", "main")
+            await _auto_create_claude_terminal(
+                session_id, resource_registry, publish_event,
+                server_client=server_client, bundle_dir=bundle_dir,
+                agent_name=agent_name, agent_spec=agent_spec,
+                skills_filter=skills_filter,
+                auth_token_factory=auth_token_factory,
+                resolve_launch_config=resolve_launch_config,
+                record_launch_config=record_launch_config,
+            )
+
+        ensure_rotation_monitor(session_id=session_id, bridge_dir=_runtime_bridge,
+                                pool=_account_pool, server_client=server_client,
+                                relaunch=_relaunch_for_account_rotation)
+    _logger.info(
+        "Auto-created claude terminal + forwarder for session %s; \""""
+    text = replace_once(text, anchor, insert, "start Claude account rotation monitor")
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_claude_bridge(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(text, '    event_name: str | None\n    recorded_at:',
+                        '    event_name: str | None\n    account_error: str | None = None\n    recorded_at:', "Claude hook structured error field")
+    text = replace_once(text, '    return ClaudeHookRecord(\n',
+                        '    return ClaudeHookRecord(\n        account_error=(payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), str) else None),\n', "parse Claude hook structured error")
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_claude_forwarder(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    anchor = '        if status is None:\n            # Compaction boundary'
+    insert = """        if record.event_name == "StopFailure" and record.account_error in {
+            "rate_limit", "rate_limit_error", "usage_limit_exceeded",
+        }:
+            from omnigent.claude_account_integration import request_claude_rotation
+
+            if request_claude_rotation(session_id):
+                status = "idle"
+        if status is None:
+            # Compaction boundary"""
+    text = replace_once(text, anchor, insert, "rotate Claude on structured quota failure")
     path.write_text(text, encoding="utf-8")
 
 
@@ -143,6 +227,10 @@ def main() -> None:
 
     patch_app_server(root / "omnigent" / "codex_native_app_server.py")
     patch_orchestration(root / "omnigent" / "runner" / "native" / "orchestration.py")
+    shutil.copy2(here / "payload" / "claude_account_integration.py", root / "omnigent" / "claude_account_integration.py")
+    patch_claude_orchestration(root / "omnigent" / "runner" / "native" / "orchestration.py")
+    patch_claude_bridge(root / "omnigent" / "claude_native_bridge.py")
+    patch_claude_forwarder(root / "omnigent" / "claude_native_forwarder.py")
     patch_executor(root / "omnigent" / "inner" / "codex_native_executor.py")
     patch_forwarder(root / "omnigent" / "codex_native_forwarder.py")
 

@@ -34,28 +34,9 @@ Communication style expected by the user: direct, technical, concise, implementa
 
 The user wants to use subscription-based coding agents for long-running development without paying API-token pricing and without manually changing accounts when a subscription quota is exhausted.
 
-The core desired route is:
-
-```text
-One Omnigent session
-        |
-        v
-Codex subscription account 1
-        |
-        | quota near/exhausted
-        v
-Codex subscription account 2
-        |
-        | quota near/exhausted
-        v
-Codex subscription account 3 ...
-        |
-        | all Codex accounts unavailable
-        v
-optional Claude Pro / Claude Code fallback
-```
-
-The number of Codex subscriptions is intentionally arbitrary. The implementation must not assume only two accounts.
+The core route is one ordered pool of any number of Codex and Claude subscription
+accounts. Either provider may be first; Claude-only pools are supported. Accounts
+are attempted in dashboard order and exhausted accounts cool down individually.
 
 The important UX requirement is not merely “launch another CLI.” The user wants **one logical Omnigent session** to survive provider/account changes:
 
@@ -67,7 +48,7 @@ The important UX requirement is not merely “launch another CLI.” The user wa
 - automatic continuation after quota-triggered failover;
 - no need for the user to re-explain the task after each account switch.
 
-Claude is currently an optional final fallback. The architecture currently supports one configured Claude fallback, not an arbitrary Claude-account pool.
+Claude is a first-class account provider with unlimited isolated profiles.
 
 No OpenAI or Anthropic API key should be introduced as a substitute for the subscription flow. The design intentionally uses the official Codex CLI / Claude Code subscription login mechanisms.
 
@@ -128,7 +109,7 @@ omni-rotate-status
 omni-rotate-accounts
 ```
 
-The word `start` is deliberate. The routed session is not “Codex only”; it starts in the Codex pool and may later fail over to Claude.
+The word `start` is deliberate. The routed session is not “Codex only”; it starts with the first available account of either provider.
 
 The dispatcher is `omni_rotate.sh`. Unknown subcommands are forwarded to the patched Omnigent CLI.
 
@@ -181,15 +162,23 @@ Interactive commands are conceptually:
 
 ```text
 codex   -> add another independent Codex subscription
-claude  -> configure the optional Claude fallback
+claude  -> add another independent Claude subscription
 done    -> finish
 ```
 
-Existing configured profiles should normally be preserved when setup is rerun.
+Existing configured profiles, threshold, enabled state, cooldowns and session bindings are preserved when setup is rerun.
+
+Each account stores `name` and `provider` (`codex` or `claude`), plus `auth_json`
+for Codex or `config_dir` for Claude. Claude homes are under
+`~/.omnigent/claude-accounts/<profile>/`. Official `claude auth login --claudeai`
+runs with an isolated `CLAUDE_CONFIG_DIR`, which also isolates macOS Keychain
+entries in current Claude Code. Inherited API/token overrides are cleared.
+Legacy fallback configuration migrates to `claude-legacy`; `use_default_config`
+preserves the normal Keychain namespace when the original login used the default home.
 
 ---
 
-## 6. Automatic Codex rotation
+## 6. Automatic account rotation
 
 The account-pool implementation lives primarily in:
 
@@ -214,34 +203,23 @@ The implementation handles current and older field naming variants where relevan
 When an account is exhausted:
 
 1. it is placed on cooldown until a known reset time, or a conservative fallback cooldown if no reset is available;
-2. the session is rebound to the next available Codex account in route order;
+2. the session is rebound to the next available account in route order;
 3. the same Omnigent session is relaunched;
 4. the same Codex thread/rollout is resumed;
 5. if the previous turn was interrupted by quota, Omni Route injects a continuation instruction so work continues automatically.
 
-If no Codex account is available and no Claude fallback exists, the runtime enters an exhausted state with a clear detail rather than silently failing over to an API provider.
+If no account of either provider is available, the runtime enters an exhausted state with a clear detail rather than silently failing over to an API provider.
 
 ---
 
-## 7. Claude fallback
+## 7. Claude account rotation
 
-Claude fallback is optional.
-
-Expected agent name in the current Omnigent integration:
-
-`claude-native-ui`
-
-The intended authentication path is the official Claude Code subscription login, not `ANTHROPIC_API_KEY`.
-
-When all Codex accounts are unavailable and Claude fallback is configured:
-
-1. Omni Route publishes a pending fallback runtime generation so the Codex-side executor can finish cleanly;
-2. waits for the Omnigent session to become idle;
-3. uses Omnigent's native `switch-agent` API to switch the **same session** to Claude;
-4. preserves transcript and workspace;
-5. for automatic quota fallback, sends a continuation instruction so Claude continues the interrupted task.
-
-Current limitation: one Claude fallback is supported. Multi-Claude subscription pooling has not been implemented.
+Claude accounts use the `claude-native-ui` Omnigent agent and official subscription
+login. Each profile has its own configuration and credential namespace. Claude
+usage-limit failures cool down that named account and continue through the mixed
+pool. Provider changes wait for the session to become idle, preserve transcript
+and workspace, and automatically continue interrupted work after quota rotation.
+Manual switches do not mark an account exhausted or inject continuation text.
 
 ---
 
@@ -262,8 +240,9 @@ Current-provider selection answers:
 Supported intended transitions:
 
 - Codex account A -> Codex account B
-- Codex -> Claude
+- Codex -> selected Claude account
 - Claude -> selected Codex account
+- Claude account A -> Claude account B
 
 Manual switching should:
 
@@ -301,7 +280,7 @@ Current purposes include:
 - auth state;
 - route order;
 - cooldown/reset information;
-- Claude fallback state;
+- Claude account state;
 - installation status;
 - diagnostics;
 - drag/drop route reordering;
@@ -480,13 +459,12 @@ Important checks include:
 - official Codex `login status` in each isolated account home;
 - distinct account identities (duplicate account identity is a real failure);
 - pool state/cooldowns;
-- optional Claude state;
+- each configured Claude subscription login state;
 - live Codex bridge/app-server account and quota checks when a routed session is running.
 
 Warnings that can be legitimate:
 
 - normal `omni` not found while `omni-rotate` itself is healthy;
-- Claude fallback not configured when the user intentionally has no Claude subscription;
 - no live Codex bridge before `omni-rotate start` has been launched.
 
 A duplicate Codex identity is not benign: two profile names that authenticate to the same ChatGPT account do not provide additional quota.
@@ -587,7 +565,7 @@ payload/codex_account_pool.py
     Persistent pool, selection, cooldown, auth binding and quota interpretation.
 
 payload/codex_account_rotation.py
-    Live rotation monitor, relaunch and Claude fallback behavior.
+    Live account rotation monitor, relaunch and provider handoff behavior.
 ```
 
 ---
@@ -625,7 +603,7 @@ Preserve these unless the user explicitly changes the product requirements:
 1. **One logical Omnigent session survives account/provider changes.**
 2. **No API-key substitution for subscription routing.**
 3. **Normal `~/.codex` authentication is not overwritten.**
-4. **Arbitrary number of Codex accounts.**
+4. **Arbitrary number of Codex and Claude accounts.**
 5. **Route order is user-controlled and authoritative.**
 6. **Manual provider switching is distinct from automatic failover order.**
 7. **Shared Codex session IDs are deduplicated across account homes.**
@@ -688,8 +666,7 @@ Check current `main` in case these have changed.
 As of this handoff's creation:
 
 - Omni Route is packaged for macOS.
-- Codex pooling supports arbitrary configured Codex accounts.
-- Claude is an optional single fallback, not a multi-Claude pool.
+- Pooling supports arbitrary Codex and Claude profiles in one ordered route.
 - The dashboard runs locally on loopback by default.
 - Secure phone/remote access is a desired next capability, not something to assume is already deployed.
 - A normal `omni` command may be absent from PATH while patched `omni-rotate` remains healthy; diagnostics treat this as a warning rather than a router failure.
@@ -712,3 +689,5 @@ A new agent should do this before giving architectural advice:
 9. Report the pushed commit and concrete behavior.
 
 If a new request appears inconsistent with this document, the user's new explicit request wins. Update this handoff file when a product-level invariant, command, architecture decision, or major capability changes so the next agent inherits the new reality.
+
+Account switches acknowledge selection before the next native turn starts; runtime phase `selected` distinguishes this from a launched account. Claude StopFailure `rate_limit` drives automatic rotation; unknown reset times use the conservative cooldown. Per-profile history is shared through the normal Claude projects directory, with original nonempty profile histories backed up before linking and conflicting files rejected.

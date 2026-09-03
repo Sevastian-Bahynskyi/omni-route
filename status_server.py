@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +27,8 @@ PATCHED_LAUNCHER = HOME / ".local" / "bin" / "omni-rotate"
 DIAG_INSTALLED = PATCHED_BASE / "diagnose.py"
 DIAG_LOCAL = Path(__file__).resolve().with_name("diagnose.py")
 _DIAG_LOCK = threading.Lock()
+_AUTH_CACHE: dict[str, tuple[float, bool | None]] = {}
+_AUTH_LOCK = threading.Lock()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -114,11 +117,50 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
             pass
 
 
+def _configured_accounts(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = config.get("accounts")
+    accounts = [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+    for account in accounts:
+        account.setdefault("provider", "codex")
+    legacy = config.get("claude_fallback_agent")
+    if isinstance(legacy, str) and legacy.strip() and not any(account.get("provider") == "claude" for account in accounts):
+        name = "claude-legacy"
+        names = {account.get("name") for account in accounts}
+        suffix = 1
+        while name in names:
+            name = f"claude-legacy-{suffix}"
+            suffix += 1
+        accounts.append({"name": name, "provider": "claude", "config_dir": os.environ.get("CLAUDE_CONFIG_DIR") or str(HOME / ".claude"), "use_default_config": not bool(os.environ.get("CLAUDE_CONFIG_DIR"))})
+    return accounts
+
+
+def _claude_authenticated(profile: tuple[str, bool]) -> bool | None:
+    config_dir, use_default_config = profile
+    cache_key = "default" if use_default_config else config_dir
+    with _AUTH_LOCK:
+        cached = _AUTH_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] < 30:
+            return cached[1]
+    from configure_subscriptions import claude_environment
+    env = claude_environment(Path(config_dir).expanduser(), use_default_config=use_default_config)
+    authenticated = None
+    try:
+        result = subprocess.run(["claude", "auth", "status", "--json"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3, check=False)
+        payload = json.loads(result.stdout)
+        if isinstance(payload, dict):
+            authenticated = result.returncode == 0 and payload.get("loggedIn") is True and payload.get("authMethod") == "claude.ai"
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    with _AUTH_LOCK:
+        _AUTH_CACHE[cache_key] = (time.monotonic(), authenticated)
+    return authenticated
+
+
 def update_route_order(names: list[str]) -> dict[str, Any]:
     config = _read_json(CONFIG_PATH)
-    accounts = config.get("accounts")
-    if not isinstance(accounts, list) or not accounts:
-        raise ValueError("no Codex accounts are configured")
+    accounts = _configured_accounts(config)
+    if not accounts:
+        raise ValueError("no subscription accounts are configured")
 
     configured: dict[str, dict[str, Any]] = {}
     for item in accounts:
@@ -135,6 +177,7 @@ def update_route_order(names: list[str]) -> dict[str, Any]:
         raise ValueError("route order contains unknown or missing accounts")
 
     config["accounts"] = [configured[name] for name in names]
+    config.pop("claude_fallback_agent", None)
     _atomic_write_json(CONFIG_PATH, config)
     # Runtime selection reads this ordered list directly. Existing bound sessions
     # stay on their current account until they rotate.
@@ -168,8 +211,10 @@ def collect_status() -> dict[str, Any]:
     config = _read_json(CONFIG_PATH)
     state = _read_json(STATE_PATH)
     now = int(time.time())
-    accounts_raw = config.get("accounts")
-    accounts_raw = accounts_raw if isinstance(accounts_raw, list) else []
+    accounts_raw = _configured_accounts(config)
+    claude_dirs = {(item["config_dir"], item.get("use_default_config") is True) for item in accounts_raw if item.get("provider") == "claude" and isinstance(item.get("config_dir"), str) and item["config_dir"]}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        claude_auth = dict(zip(claude_dirs, executor.map(_claude_authenticated, claude_dirs)))
     cooldowns = state.get("cooldowns")
     cooldowns = cooldowns if isinstance(cooldowns, dict) else {}
     bindings = state.get("session_bindings")
@@ -181,11 +226,18 @@ def collect_status() -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         name = item.get("name")
+        provider = item.get("provider", "codex")
+        if provider not in {"codex", "claude"}:
+            continue
         auth_json = item.get("auth_json")
         if not isinstance(name, str) or not name:
             continue
         auth_path = Path(auth_json).expanduser() if isinstance(auth_json, str) and auth_json else None
         auth_present = bool(auth_path and auth_path.is_file() and auth_path.stat().st_size > 0)
+        authenticated = claude_auth.get((item.get("config_dir"), item.get("use_default_config") is True)) if provider == "claude" and isinstance(item.get("config_dir"), str) else auth_present
+        if provider == "claude":
+            auth_present = authenticated is True
+        cli_installed = shutil.which(provider) is not None
         cooldown = cooldowns.get(name)
         cooldown = cooldown if isinstance(cooldown, dict) else {}
         retry_at = cooldown.get("retry_at")
@@ -193,7 +245,9 @@ def collect_status() -> dict[str, Any]:
         cooling_down = retry_at is not None and retry_at > now
         sessions = sum(1 for value in bindings.values() if value == name)
 
-        if not auth_present:
+        if provider == "claude" and authenticated is None:
+            status = "auth_unknown" if cli_installed else "missing_cli"
+        elif not auth_present:
             status = "missing_auth"
         elif cooling_down:
             status = "cooldown"
@@ -206,6 +260,9 @@ def collect_status() -> dict[str, Any]:
             {
                 "index": index,
                 "name": name,
+                "provider": provider,
+                "authenticated": authenticated,
+                "cliInstalled": cli_installed,
                 "email": _email_from_auth(auth_path) if auth_present else None,
                 "status": status,
                 "authPresent": auth_present,
@@ -216,11 +273,6 @@ def collect_status() -> dict[str, Any]:
             }
         )
 
-    claude_agent = config.get("claude_fallback_agent")
-    claude_configured = isinstance(claude_agent, str) and bool(claude_agent.strip())
-    claude_cli = shutil.which("claude") is not None
-    claude_auth = _command_ok(["claude", "auth", "status"]) if claude_configured and claude_cli else None
-
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "router": {
@@ -229,15 +281,10 @@ def collect_status() -> dict[str, Any]:
             "threshold": config.get("rotate_at_percent", 99),
             "currentAccount": current,
             "accountCount": len(accounts),
+            "providerCounts": {provider: sum(account["provider"] == provider for account in accounts) for provider in ("codex", "claude")},
             "activeBindings": len(bindings),
         },
         "accounts": accounts,
-        "claude": {
-            "configured": claude_configured,
-            "agent": claude_agent if claude_configured else None,
-            "cliInstalled": claude_cli,
-            "authenticated": claude_auth,
-        },
         "install": {
             "patchedRuntime": PATCHED_BASE.is_dir(),
             "patchedLauncher": PATCHED_LAUNCHER.is_file(),

@@ -62,10 +62,10 @@ def collect_status() -> dict[str, Any]:
     runtime = _latest_runtime()
     mode = runtime.get("mode") if isinstance(runtime.get("mode"), str) else None
     session_id = runtime.get("session_id") if isinstance(runtime.get("session_id"), str) else None
-    if mode == "codex" and isinstance(runtime.get("account_name"), str):
+    if mode in {"codex", "claude", "claude_pending", "switch_pending"} and isinstance(runtime.get("account_name"), str):
         provider = runtime["account_name"]
     elif mode in {"claude", "claude_pending"}:
-        provider = "claude"
+        provider = next((account["name"] for account in data.get("accounts", []) if account.get("provider") == "claude"), None)
     else:
         provider = None
 
@@ -84,8 +84,6 @@ def collect_status() -> dict[str, Any]:
         elif not is_current and account.get("status") == "active":
             account["status"] = "ready"
 
-    claude = data.setdefault("claude", {})
-    claude["current"] = provider == "claude"
     install = data.setdefault("install", {})
     install["sessionImporter"] = (base.PATCHED_BASE / "import_sessions.py").is_file()
     install["tailscale"] = bool(_remote_status().get("installed"))
@@ -113,8 +111,8 @@ def _run_switch(provider: str) -> dict[str, Any]:
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "provider switch timed out"}
-    except OSError as exc:
-        return {"ok": False, "error": str(exc)}
+    except OSError:
+        return {"ok": False, "error": "could not start account switch"}
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if lines:
         try:
@@ -125,7 +123,7 @@ def _run_switch(provider: str) -> dict[str, Any]:
                 return payload
         except json.JSONDecodeError:
             pass
-    return {"ok": False, "error": result.stdout.strip()[-1000:] or f"exit {result.returncode}"}
+    return {"ok": False, "error": "account switch failed; run omni-rotate test for diagnostics"}
 
 
 class ControlHandler(base.StatusHandler):
@@ -156,6 +154,9 @@ class ControlHandler(base.StatusHandler):
             provider = request.get("provider")
             if not isinstance(provider, str) or not provider.strip():
                 raise ValueError("provider must be a non-empty string")
+            configured = base._configured_accounts(base._read_json(base.CONFIG_PATH))
+            if provider.strip() not in {account.get("name") for account in configured}:
+                raise ValueError("unknown subscription account")
         except (ValueError, json.JSONDecodeError) as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         if not _SWITCH_LOCK.acquire(blocking=False):

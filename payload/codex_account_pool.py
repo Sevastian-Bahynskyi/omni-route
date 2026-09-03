@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import os
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -37,7 +38,10 @@ class AccountPoolError(RuntimeError):
 @dataclass(frozen=True)
 class AccountProfile:
     name: str
-    auth_json: Path
+    auth_json: Path | None = None
+    provider: str = "codex"
+    config_dir: Path | None = None
+    use_default_config: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,12 +66,33 @@ class PoolConfig:
             if not isinstance(value, dict):
                 continue
             name = value.get("name")
-            auth = value.get("auth_json")
+            provider = value.get("provider", "codex")
             if not isinstance(name, str) or not name.strip():
                 raise AccountPoolError("each account needs a non-empty name")
-            if not isinstance(auth, str) or not auth.strip():
-                raise AccountPoolError(f"account {name!r} needs auth_json")
-            accounts.append(AccountProfile(name.strip(), Path(auth).expanduser()))
+            if provider not in {"codex", "claude"}:
+                raise AccountPoolError("unknown subscription provider")
+            key = "auth_json" if provider == "codex" else "config_dir"
+            location = value.get(key)
+            if not isinstance(location, str) or not location.strip():
+                raise AccountPoolError(f"account needs {key}")
+            accounts.append(AccountProfile(
+                name.strip(),
+                Path(location).expanduser() if provider == "codex" else None,
+                provider,
+                Path(location).expanduser() if provider == "claude" else None,
+                value.get("use_default_config") is True,
+            ))
+        if raw.get("claude_fallback_agent") and not any(a.provider == "claude" for a in accounts):
+            legacy_name = "claude-legacy"
+            number = 1
+            while any(a.name == legacy_name for a in accounts):
+                legacy_name = f"claude-legacy-{number}"
+                number += 1
+            accounts.append(AccountProfile(
+                legacy_name, provider="claude",
+                config_dir=Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser(),
+                use_default_config=not bool(os.environ.get("CLAUDE_CONFIG_DIR")),
+            ))
         if len({a.name for a in accounts}) != len(accounts):
             raise AccountPoolError("account names must be unique")
         threshold = raw.get("rotate_at_percent", DEFAULT_ROTATE_AT_PERCENT)
@@ -114,7 +139,7 @@ class CodexAccountPool:
             return ["pool is disabled or contains no accounts"]
         problems: list[str] = []
         for account in self.config.accounts:
-            if not auth_json_has_credential(account.auth_json):
+            if not account_has_credential(account):
                 problems.append(f"{account.name}: missing/unusable {account.auth_json}")
         return problems
 
@@ -128,7 +153,7 @@ class CodexAccountPool:
             bound = bindings.get(session_id)
             if isinstance(bound, str):
                 profile = self._by_name(bound)
-                if profile is not None and auth_json_has_credential(profile.auth_json) and self._available(state, bound, now):
+                if profile is not None and account_has_credential(profile) and self._available(state, bound, now):
                     return profile
             account = self._choose(state, now)
             if account is None:
@@ -172,7 +197,7 @@ class CodexAccountPool:
         for profile in self.config.accounts:
             if profile.name in exclude:
                 continue
-            if auth_json_has_credential(profile.auth_json) and self._available(state, profile.name, now):
+            if account_has_credential(profile) and self._available(state, profile.name, now):
                 return profile
         return None
 
@@ -212,7 +237,9 @@ class CodexAccountPool:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def auth_json_has_credential(path: Path) -> bool:
+def auth_json_has_credential(path: Path | None) -> bool:
+    if path is None:
+        return False
     try:
         raw = _read_json(path.expanduser())
     except Exception:
@@ -223,6 +250,47 @@ def auth_json_has_credential(path: Path) -> bool:
     if isinstance(tokens, dict) and any(isinstance(tokens.get(k), str) and bool(tokens.get(k).strip()) for k in ("access_token", "refresh_token", "id_token")):
         return True
     return any(isinstance(raw.get(k), str) and bool(raw.get(k).strip()) for k in ("OPENAI_API_KEY", "personal_access_token"))
+
+
+_CLAUDE_AUTH_CACHE: dict[tuple[str, bool], tuple[float, bool]] = {}
+
+
+def claude_account_env(profile: AccountProfile) -> dict[str, str]:
+    env = dict(os.environ)
+    for key in (
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_PROFILE",
+        "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+        "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CONFIG_DIR",
+    ):
+        env.pop(key, None)
+    if not profile.use_default_config and profile.config_dir is not None:
+        env["CLAUDE_CONFIG_DIR"] = str(profile.config_dir)
+    return env
+
+
+def account_has_credential(profile: AccountProfile) -> bool:
+    if profile.provider == "codex":
+        return auth_json_has_credential(profile.auth_json)
+    if profile.config_dir is None:
+        return False
+    key = (str(profile.config_dir), profile.use_default_config)
+    cached = _CLAUDE_AUTH_CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < 30:
+        return cached[1]
+    try:
+        result = subprocess.run(
+            ["claude", "auth", "status", "--json"], env=claude_account_env(profile),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=5, check=False,
+        )
+        status = json.loads(result.stdout)
+        valid = result.returncode == 0 and isinstance(status, dict) and status.get("loggedIn") is True and status.get("authMethod") == "claude.ai"
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        valid = False
+    _CLAUDE_AUTH_CACHE[key] = (time.monotonic(), valid)
+    return valid
 
 
 def bind_account_auth(private_codex_home: Path, source_auth_json: Path) -> None:
@@ -360,10 +428,10 @@ def request_rotation_from_usage_error(bridge_dir: Path, *, session_id: str, payl
     return True
 
 
-def record_runtime_account(bridge_dir: Path, *, session_id: str, account_name: str) -> int:
+def record_runtime_account(bridge_dir: Path, *, session_id: str, account_name: str, provider: str = "codex", phase: str = "active") -> int:
     previous = read_runtime(bridge_dir) or {}
     generation = int(previous.get("generation", 0)) + 1
-    _atomic_json(bridge_dir / RUNTIME_FILE, {"session_id": session_id, "mode": "codex", "account_name": account_name, "generation": generation, "updated_at": int(time.time())})
+    _atomic_json(bridge_dir / RUNTIME_FILE, {"session_id": session_id, "mode": provider, "phase": phase, "account_name": account_name, "generation": generation, "updated_at": int(time.time())})
     return generation
 
 

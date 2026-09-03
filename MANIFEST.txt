@@ -1,6 +1,6 @@
 Omni Route / Omnigent Subscription Rotation
 Pinned Omnigent commit: 2b13f2d7d85431c06e510d3c707c0c6d9a191a44
-Routing: ordered Codex subscription pool -> optional Claude Pro fallback
+Routing: ordered mixed Codex + Claude subscription pool; unlimited named accounts
 Primary command: omni-rotate
 Subcommands: start | test | status | accounts | sessions
 Compatibility: omni-rotate codex aliases omni-rotate start
@@ -18,3 +18,6 @@ Omni Route installer: install.sh
 Full macOS installer: install_all.sh
 Omni Route-only uninstaller: uninstall.sh
 Full macOS cleanup: uninstall_all.sh
+Routed start selector: routed_start.py
+Claude lifecycle integration: payload/claude_account_integration.py
+Regression suites: test_routing.py, test_setup.py, test_dashboard.py, test_integration.py

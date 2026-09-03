@@ -54,8 +54,8 @@ ensure_brew_pkg uv uv
 ensure_brew_pkg tmux tmux
 ensure_tailscale
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "ERROR: Codex CLI is required. Install Codex first." >&2
+if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
+  echo "ERROR: Install Codex CLI or Claude Code first." >&2
   exit 1
 fi
 
@@ -104,6 +104,9 @@ echo "Installing Omnigent dependencies in an isolated uv environment..."
 
 echo "Running extension self-tests..."
 PYTHONPATH="${SRC}" "${SRC}/.venv/bin/python" "${HERE}/self_test.py"
+PYTHONPATH="${SRC}" "${SRC}/.venv/bin/python" "${HERE}/test_routing.py"
+python3 "${HERE}/test_setup.py"
+python3 "${HERE}/test_dashboard.py"
 python3 "${HERE}/import_sessions.py" --self-test
 python3 -m py_compile \
   "${HERE}/status_server.py" \
@@ -116,6 +119,9 @@ echo "Compiling patched modules..."
 (
   cd "${SRC}"
   "${SRC}/.venv/bin/python" -m compileall -q \
+    omnigent/claude_account_integration.py \
+    omnigent/claude_native_bridge.py \
+    omnigent/claude_native_forwarder.py \
     omnigent/codex_account_pool.py \
     omnigent/codex_account_rotation.py \
     omnigent/codex_native_app_server.py \
@@ -135,6 +141,7 @@ cp "${HERE}/status_server_ext.py" "${BASE}/status_server_ext.py"
 cp "${HERE}/remote_access.py" "${BASE}/remote_access.py"
 cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
 cp "${HERE}/switch_provider.py" "${BASE}/switch_provider.py"
+cp "${HERE}/routed_start.py" "${BASE}/routed_start.py"
 cp "${HERE}/import_sessions.py" "${BASE}/import_sessions.py"
 chmod 700 \
   "${BASE}/configure_subscriptions.py" \

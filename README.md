@@ -1,8 +1,8 @@
 # Omni Route / Omnigent Subscription Rotation
 
 Omni Route is a macOS extension around Omnigent that rotates one routed coding
-session across multiple ChatGPT/Codex subscription accounts and can optionally
-fall back to Claude Pro. It uses the official Codex/Claude CLI subscription
+session across any number of ChatGPT/Codex and Claude subscription accounts in one
+ordered pool. It uses the official Codex/Claude CLI subscription
 logins; it does not convert subscriptions into API keys.
 
 > **Coding agents:** read [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md) completely before modifying this repository. It contains the canonical product context, architecture decisions, invariants, testing expectations, and repository workflow.
@@ -23,8 +23,16 @@ Tailscale is installed automatically when missing so secure remote dashboard
 access is available without a separate install step. Tailscale account sign-in
 and connection are still explicit user actions.
 
-During account setup, enter `codex` once per Codex subscription, optionally
-`claude`, then `done`.
+During account setup, enter `codex` or `claude` once per subscription, then
+`done`. Either provider can be first, and Claude-only pools are supported.
+Each login gets a separate named profile; rerunning setup preserves existing
+accounts, route settings, cooldowns and session bindings. Existing Claude
+fallback configuration migrates to a regular `claude-legacy` profile.
+
+Codex uses isolated `CODEX_HOME` credentials. Claude uses isolated
+`CLAUDE_CONFIG_DIR` profiles, including distinct macOS Keychain entries as
+documented in [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+Use a current Claude Code release. Normal CLI logins remain unchanged.
 
 ## Commands
 
@@ -47,18 +55,19 @@ The dashboard runs on `http://127.0.0.1:8787/` and opens automatically after a
 successful `install.sh`.
 
 It shows account emails/status, the automatic route chain, current routed
-provider, installation health and diagnostics. Codex accounts can be dragged in
+provider, installation health and diagnostics. Accounts from either provider can be dragged in
 the route chain; the saved order is the actual priority used for new account
 selection and quota failover.
 
-The **Current provider** dropdown switches the latest routed Omnigent session
+The **Current account** dropdown switches the latest routed Omnigent session
 without changing route priority:
 
 - Codex account -> another Codex account: waits for the current turn to become
   idle, binds the requested subscription and relaunches the same session.
-- Codex -> Claude: uses Omnigent's native agent switch after the turn is idle.
+- Codex -> selected Claude account: uses Omnigent's native agent switch after the turn is idle.
 - Claude -> Codex: binds the selected Codex subscription and switches the same
   Omnigent session back to `codex-native-ui`.
+- Claude account -> another Claude account: relaunches with the selected isolated login.
 
 A stopped/resumable Codex session can also have its next Codex account selected;
 the binding is used when that session resumes.
@@ -89,7 +98,7 @@ omni-rotate sessions
 The importer:
 
 - scans normal `~/.codex`, every registered Omni Route Codex account home, the
-  active Claude config home, and future Omni Route Claude account homes;
+  active Claude config home, and registered Omni Route Claude account homes;
 - uses Omnigent's own Codex/Claude transcript normalizers, preserving native
   titles, workspaces and resumable external session IDs;
 - creates/reuses first-class Omnigent projects by transcript workspace/cwd, so
@@ -101,12 +110,13 @@ The importer:
 
 ## Routing behavior
 
-Codex accounts are attempted in dashboard route order. Before a new turn Omni
-Route checks Codex rate limits. At the configured threshold (default 99%), or on
-a structured usage-limit error, the current account is cooled down and the same
-Omnigent session is relaunched on the next available account. If every Codex
-subscription is unavailable and Claude is configured, the same session switches
-to Claude and continues automatically.
+Accounts are attempted in dashboard route order regardless of provider. Before a
+new Codex turn Omni Route checks Codex rate limits. At the configured threshold
+(default 99%), or on a provider usage-limit error, the current account is cooled
+down and the same Omnigent session continues on the next available account.
+Claude accounts participate in the same routing and cooldown logic. Provider
+changes preserve the workspace and accumulated conversation context. When all
+accounts are unavailable the router reports exhaustion until an account recovers.
 
 Manual dashboard provider switches do not mark an account exhausted and do not
 inject an automatic continuation prompt.

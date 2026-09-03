@@ -81,114 +81,90 @@ async def _switch_agent(client: Any, session_id: str, agent_name: str) -> None:
     )
     switched.raise_for_status()
 
-def _bind_pool_account(pool: Any, session_id: str, provider: str) -> None:
-    from omnigent.codex_account_pool import auth_json_has_credential
-
-    profile = pool._by_name(provider)
-    if profile is None:
-        raise RuntimeError(f"unknown Codex account {provider!r}")
-    if not auth_json_has_credential(profile.auth_json):
-        raise RuntimeError(f"Codex account {provider!r} has no usable auth")
-    now = int(pool._now())
-    with pool._locked_state() as state:
-        pool._prune(state, now)
-        if not pool._available(state, provider, now):
-            raise RuntimeError(f"Codex account {provider!r} is cooling down")
-        state.setdefault("session_bindings", {})[session_id] = provider
-        state["current_account"] = provider
-
-
-
 async def switch_provider(provider: str) -> dict[str, Any]:
-    from omnigent.cli_auth import open_server_client
     from omnigent.codex_account_pool import (
-        CodexAccountPool,
-        ROTATE_FILE,
-        read_runtime,
-        record_runtime_account,
-        record_runtime_fallback,
+        CodexAccountPool, ROTATE_FILE, _atomic_json, account_has_credential,
+        read_runtime, record_runtime_account,
     )
+    from omnigent.codex_account_rotation import _bind_manual_account
 
     found = latest_bridge()
     if found is None:
-        raise RuntimeError("no routed session exists yet; run `omni-rotate start` first")
+        raise RuntimeError("Start a routed session before switching accounts.")
     bridge, runtime = found
-    session_id = runtime.get("session_id")
-    mode = runtime.get("mode")
-    current_account = runtime.get("account_name")
-    if not isinstance(session_id, str):
-        raise RuntimeError("latest routed runtime has no session id")
-
+    session_id = runtime["session_id"]
     pool = CodexAccountPool.from_default()
-    account_names = {account.name for account in pool.config.accounts}
-    target_is_claude = provider == "claude"
-    if not target_is_claude and provider not in account_names:
-        raise RuntimeError(f"unknown Codex provider {provider!r}")
-    if target_is_claude and pool.config.claude_fallback_agent is None:
-        raise RuntimeError("Claude fallback is not configured")
-
-    if mode == "codex" and isinstance(current_account, str):
-        if not target_is_claude and provider == current_account:
-            return {"ok": True, "provider": provider, "sessionId": session_id, "changed": False}
-        if not target_is_claude:
-            from omnigent.codex_native_bridge import read_bridge_state
-            bridge_state = read_bridge_state(bridge)
-            socket_live = bool(bridge_state and Path(bridge_state.socket_path).exists())
-            if not socket_live:
-                _bind_pool_account(pool, session_id, provider)
-                record_runtime_account(bridge, session_id=session_id, account_name=provider)
-                return {"ok": True, "provider": provider, "sessionId": session_id, "changed": True}
-
-        request_path = bridge / ROTATE_FILE
-        if request_path.exists():
-            raise RuntimeError("an account rotation/switch is already pending")
-        request = {
-            "session_id": session_id,
-            "account_name": current_account,
-            "target_account": provider,
-            "manual": True,
-            "retry_at": None,
-            "reason": "manual_provider_switch",
-            "replay_required": False,
-            "requested_at": int(time.time()),
-        }
-        tmp = request_path.with_suffix(".manual.tmp")
-        tmp.write_text(json.dumps(request, indent=2) + "\n", encoding="utf-8")
-        tmp.chmod(0o600)
-        tmp.replace(request_path)
-
-        generation = int(runtime.get("generation", 0))
-        deadline = asyncio.get_running_loop().time() + 140.0
-        while asyncio.get_running_loop().time() < deadline:
-            updated = read_runtime(bridge)
-            if updated and int(updated.get("generation", 0)) > generation:
-                if provider == "claude" and updated.get("mode") == "claude":
-                    return {"ok": True, "provider": provider, "sessionId": session_id, "changed": True}
-                if (
-                    provider != "claude"
-                    and updated.get("mode") == "codex"
-                    and updated.get("account_name") == provider
-                ):
-                    return {"ok": True, "provider": provider, "sessionId": session_id, "changed": True}
-            await asyncio.sleep(0.25)
-        raise RuntimeError("provider switch did not complete within 140 seconds")
-
-    if mode in {"claude", "claude_pending"}:
-        if target_is_claude:
-            return {"ok": True, "provider": "claude", "sessionId": session_id, "changed": False}
-        # Bind the requested account before switching the agent back to Codex.
-        _bind_pool_account(pool, session_id, provider)
+    target = pool._by_name(provider)
+    if target is None or not account_has_credential(target):
+        raise RuntimeError("Choose a configured account with a valid subscription login.")
+    if runtime.get("account_name") == provider and runtime.get("mode") == target.provider:
+        return {"ok": True, "provider": provider, "changed": False}
+    if runtime.get("mode") not in {"codex", "claude", "exhausted"}:
+        raise RuntimeError("An account switch is already in progress.")
+    request_path = bridge / ROTATE_FILE
+    if request_path.exists():
+        raise RuntimeError("An account switch is already pending.")
+    if runtime.get("mode") == "codex" and target.provider == "codex":
+        from omnigent.codex_native_bridge import read_bridge_state
+        state = read_bridge_state(bridge)
+        if not state or not Path(state.socket_path).exists():
+            if not _bind_manual_account(pool, session_id=session_id, account_name=provider):
+                raise RuntimeError("This account is unavailable.")
+            record_runtime_account(bridge, session_id=session_id, account_name=provider)
+            return {"ok": True, "provider": provider, "changed": True}
+    if runtime.get("phase") == "selected" or (runtime.get("mode") == "exhausted" and not isinstance(current_account := runtime.get("account_name"), str)):
+        from omnigent.cli_auth import open_server_client
+        from omnigent.codex_account_rotation import switch_to_account
         async with open_server_client(BASE_URL) as client:
-            await _switch_agent(client, session_id, "codex-native-ui")
-        record_runtime_account(bridge, session_id=session_id, account_name=provider)
-        return {"ok": True, "provider": provider, "sessionId": session_id, "changed": True}
-
-    raise RuntimeError(f"cannot switch provider while routed runtime mode is {mode!r}")
+            await _wait_session_idle(client, session_id)
+            if not _bind_manual_account(pool, session_id=session_id, account_name=provider):
+                raise RuntimeError("This account is unavailable.")
+            active_provider = runtime.get("mode")
+            if active_provider == "exhausted":
+                encoded = urllib.parse.quote(session_id, safe="")
+                response = await client.get(f"/v1/sessions/{encoded}", timeout=5)
+                response.raise_for_status()
+                agent_name = response.json().get("agent_name", "")
+                active_provider = "claude" if agent_name == "claude-native-ui" else "codex" if agent_name == "codex-native-ui" else None
+                if active_provider is None:
+                    raise RuntimeError("Session provider could not be resolved. Resume the session and retry.")
+                if active_provider == target.provider:
+                    terminals = await client.get(f"/v1/sessions/{encoded}/resources/terminals", params={"limit": 100}, timeout=10)
+                    terminals.raise_for_status()
+                    for terminal in terminals.json().get("data", []):
+                        metadata = terminal.get("metadata", {})
+                        if metadata.get("terminal_name") == active_provider and metadata.get("session_key") == "main":
+                            terminal_id = urllib.parse.quote(terminal["id"], safe="")
+                            closed = await client.delete(f"/v1/sessions/{encoded}/resources/terminals/{terminal_id}", timeout=10)
+                            closed.raise_for_status()
+            if active_provider != target.provider:
+                await switch_to_account(session_id=session_id, bridge_dir=bridge, server_client=client,
+                                        profile=target, continue_after_switch=False)
+            else:
+                record_runtime_account(bridge, session_id=session_id, account_name=provider,
+                                       provider=target.provider, phase="selected")
+    else:
+        _atomic_json(request_path, {
+            "session_id": session_id, "account_name": runtime.get("account_name"),
+            "target_account": provider, "manual": True, "replay_required": False,
+            "requested_at": int(time.time()),
+        })
+    generation = int(runtime.get("generation", 0))
+    deadline = asyncio.get_running_loop().time() + 140
+    while asyncio.get_running_loop().time() < deadline:
+        updated = read_runtime(bridge) or {}
+        if int(updated.get("generation", 0)) > generation:
+            if updated.get("mode") == target.provider and updated.get("account_name") == provider:
+                return {"ok": True, "provider": provider, "changed": True}
+            if updated.get("mode") == "exhausted":
+                raise RuntimeError("Account switch failed. Check sign-in and retry.")
+        await asyncio.sleep(0.25)
+    raise RuntimeError("Account switch timed out. Check the session and retry.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Switch provider/account for the latest routed Omni Route session")
-    parser.add_argument("provider", help="Codex account name or 'claude'")
+    parser.add_argument("provider", help="Configured Codex or Claude account name")
     args = parser.parse_args()
     try:
         result = asyncio.run(switch_provider(args.provider))

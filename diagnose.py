@@ -267,7 +267,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only Omni Route diagnostics"); parser.parse_args()
     rep = Reporter(); print("OMNI ROUTE // READ-ONLY DIAGNOSTIC"); print(time.strftime("%Y-%m-%d %H:%M:%S %Z")); print()
     rep.emit(PASS if sys.platform == "darwin" else FAIL, "platform", "macOS" if sys.platform == "darwin" else sys.platform)
-    codex = command_check(rep, "codex", required=True); command_check(rep, "uv", required=True); command_check(rep, "tmux", required=True); command_check(rep, "omni", required=False)
+    config = read_json(CONFIG_PATH)
+    configured = config.get("accounts", [])
+    needs_codex = any(isinstance(a, dict) and a.get("provider", "codex") == "codex" for a in configured) if isinstance(configured, list) else False
+    codex = command_check(rep, "codex", required=needs_codex); command_check(rep, "uv", required=True); command_check(rep, "tmux", required=True); command_check(rep, "omni", required=False)
     for name in ("omni-rotate", "omni-rotate-accounts", "omni-rotate-status"):
         path = BIN / name; rep.emit(PASS if path.is_file() else FAIL, f"launcher {name}", str(path))
     if SRC.is_dir() and VENV_PYTHON.is_file() and PATCHED_OMNI.is_file():
@@ -283,32 +286,58 @@ def main() -> int:
     rep.emit(PASS, "account pool config", str(CONFIG_PATH))
     threshold = config.get("rotate_at_percent")
     rep.emit(PASS if isinstance(threshold,(int,float)) and 0<float(threshold)<=100 else FAIL, "rotation threshold", f"{threshold}%" if isinstance(threshold,(int,float)) else repr(threshold))
-    accounts_raw=config.get("accounts"); accounts=accounts_raw if isinstance(accounts_raw,list) else []; rep.emit(PASS if accounts else FAIL, "configured Codex accounts", str(len(accounts)) if accounts else "none")
+    accounts_raw=config.get("accounts"); accounts=accounts_raw if isinstance(accounts_raw,list) else []; rep.emit(PASS if accounts else FAIL, "configured subscription accounts", str(len(accounts)) if accounts else "none")
     identities: dict[str,list[str]]={}; configured_names:set[str]=set()
     for index,item in enumerate(accounts,1):
         if not isinstance(item,dict): rep.emit(FAIL,f"account #{index}","invalid config entry"); continue
         name=item.get("name"); auth_raw=item.get("auth_json")
         if not isinstance(name,str) or not name: rep.emit(FAIL,f"account #{index}","missing name"); continue
         configured_names.add(name)
+        provider = item.get("provider", "codex")
+        if provider == "claude":
+            config_dir = item.get("config_dir")
+            if not isinstance(config_dir, str) or not config_dir:
+                rep.emit(FAIL, f"account {name}", "missing config_dir"); continue
+            claude = shutil.which("claude")
+            if not claude:
+                rep.emit(FAIL, f"account {name} Claude login", "Claude CLI missing"); continue
+            from configure_subscriptions import claude_environment
+            env = claude_environment(Path(config_dir).expanduser(), use_default_config=item.get("use_default_config") is True)
+            result = run([claude, "auth", "status", "--json"], env=env, timeout=10)
+            try:
+                status = json.loads(result.stdout) if result else {}
+            except ValueError:
+                status = {}
+            authenticated = bool(result and result.returncode == 0 and isinstance(status, dict) and status.get("loggedIn") is True and status.get("authMethod") == "claude.ai")
+            rep.emit(PASS if authenticated else FAIL, f"account {name} Claude login", "subscription authenticated" if authenticated else "subscription login required")
+            if authenticated and isinstance(status.get("email"), str):
+                identities.setdefault("claude:" + status["email"].casefold(), []).append(name)
+            credentials = Path(config_dir).expanduser() / ".credentials.json"
+            if credentials.is_file():
+                mode = stat.S_IMODE(credentials.stat().st_mode)
+                rep.emit(WARN if mode & 0o077 else PASS, f"account {name} credential permissions", oct(mode))
+            continue
+        if provider != "codex":
+            rep.emit(FAIL, f"account {name}", "unknown provider"); continue
         if not isinstance(auth_raw,str) or not auth_raw: rep.emit(FAIL,f"account {name}","missing auth_json"); continue
         auth_path=Path(auth_raw).expanduser()
         if not auth_path.is_file() or auth_path.stat().st_size==0: rep.emit(FAIL,f"account {name} auth","missing/empty auth.json"); continue
-        identity=identity_from_auth(auth_path); email=identity["email"] or "email unavailable"; rep.emit(PASS,f"account {name} auth file",email)
+        identity=identity_from_auth(auth_path); rep.emit(PASS,f"account {name} auth file","present")
         try:
             mode=stat.S_IMODE(auth_path.stat().st_mode); rep.emit(WARN if mode & 0o077 else PASS,f"account {name} auth permissions",oct(mode))
         except OSError: rep.emit(WARN,f"account {name} auth permissions","could not stat")
         stable_identity=identity["account_id"] or identity["subject"] or identity["email"]
-        if stable_identity: identities.setdefault(stable_identity,[]).append(name)
+        if stable_identity: identities.setdefault("codex:" + stable_identity,[]).append(name)
         if codex:
             env=os.environ.copy(); env["CODEX_HOME"]=str(auth_path.parent); result=run([codex,"-c",'cli_auth_credentials_store="file"',"login","status"],env=env,timeout=10)
             if result and result.returncode==0:
-                status_text=(result.stdout or result.stderr).strip().replace("\n"," "); rep.emit(PASS,f"account {name} Codex login",status_text[:180] or email)
+                rep.emit(PASS,f"account {name} Codex login","authenticated")
             else:
-                detail=((result.stderr or result.stdout).strip() if result else "command failed")[:180]; rep.emit(FAIL,f"account {name} Codex login",detail)
+                rep.emit(FAIL,f"account {name} Codex login","login status check failed")
     duplicates={key:names for key,names in identities.items() if len(names)>1}
     if duplicates:
-        for names in duplicates.values(): rep.emit(FAIL,"duplicate Codex identity",", ".join(names))
-    elif len(accounts)>1: rep.emit(PASS,"Codex account identities","registered profiles appear distinct")
+        for names in duplicates.values(): rep.emit(FAIL,"duplicate subscription identity",", ".join(names))
+    elif len(accounts)>1: rep.emit(PASS,"Subscription account identities","registered profiles appear distinct")
     state=read_json(STATE_PATH)
     if STATE_PATH.exists() and not state: rep.emit(FAIL,"pool state","exists but is unreadable")
     elif state:
@@ -326,13 +355,8 @@ def main() -> int:
             rep.emit(INFO,"active cooldowns",", ".join(active) if active else "none")
         else: rep.emit(WARN,"pool cooldown state","unexpected shape")
     else: rep.emit(INFO,"pool state","not created yet; first routed session will create it")
-    claude_agent=config.get("claude_fallback_agent")
-    if isinstance(claude_agent,str) and claude_agent.strip():
-        claude=shutil.which("claude")
-        if not claude: rep.emit(FAIL,"Claude fallback","configured but Claude CLI missing")
-        else:
-            result=run([claude,"auth","status"],timeout=8); rep.emit(PASS if result and result.returncode==0 else FAIL,"Claude fallback","configured and authenticated" if result and result.returncode==0 else "configured but not authenticated")
-    else: rep.emit(WARN,"Claude fallback","not configured (optional)")
+    if config.get("claude_fallback_agent"):
+        rep.emit(WARN, "legacy Claude configuration", "run omni-rotate accounts to migrate it into the account pool")
     test_live_bridge(rep,configured_names); return rep.summary()
 
 

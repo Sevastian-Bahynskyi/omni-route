@@ -13,7 +13,10 @@ import httpx
 
 from omnigent.codex_account_pool import (
     CodexAccountPool,
-    auth_json_has_credential,
+    AccountProfile,
+    account_has_credential,
+    record_runtime_account,
+    _atomic_json,
     clear_rotation_request,
     decide_rate_limits,
     read_rotation_request,
@@ -88,7 +91,7 @@ def _bind_manual_account(
 ) -> bool:
     """Bind one available configured account without marking any account exhausted."""
     profile = pool._by_name(account_name)
-    if profile is None or not auth_json_has_credential(profile.auth_json):
+    if profile is None or not account_has_credential(profile):
         return False
     now = int(pool._now())
     with pool._locked_state() as state:
@@ -133,6 +136,7 @@ async def _monitor(
 
         runtime = read_runtime(bridge_dir) or {}
         current_account = runtime.get("account_name")
+        active_provider = runtime.get("active_provider", runtime.get("mode"))
         requested_account = request.get("account_name")
         if not isinstance(current_account, str):
             clear_rotation_request(bridge_dir)
@@ -144,118 +148,73 @@ async def _monitor(
 
         live_pool = CodexAccountPool.from_default()
 
-        # Dashboard account switch: do not mark the current account exhausted and
-        # do not disturb a running turn. The selected binding is applied only
-        # once the current Codex turn is idle, then the same Omnigent session is
-        # relaunched on that account.
         manual_target = request.get("target_account") if request.get("manual") else None
-        if isinstance(manual_target, str):
-            if manual_target == current_account:
+        manual = isinstance(manual_target, str)
+        if manual:
+            if manual_target == current_account and runtime.get("mode") in {"codex", "claude"}:
                 clear_rotation_request(bridge_dir)
                 continue
-            if not await _wait_codex_idle(bridge_dir):
-                _logger.warning(
-                    "Timed out waiting for %s to become idle for manual provider switch",
-                    session_id,
-                )
+            if not await _wait_idle(bridge_dir, active_provider, server_client, session_id):
                 clear_rotation_request(bridge_dir)
                 continue
-            if manual_target == "claude":
-                fallback_name = live_pool.config.claude_fallback_agent
-                clear_rotation_request(bridge_dir)
-                if fallback_name is None:
-                    _logger.warning("Manual Claude switch requested but Claude is not configured")
-                    continue
-                record_runtime_fallback(
-                    bridge_dir,
-                    session_id=session_id,
-                    mode="claude_pending",
-                    detail=fallback_name,
-                )
-                await _fallback_to_claude_when_idle(
-                    session_id=session_id,
-                    bridge_dir=bridge_dir,
-                    server_client=server_client,
-                    fallback_name=fallback_name,
-                    continue_after_switch=False,
-                )
-                return
-            if not _bind_manual_account(
-                live_pool,
-                session_id=session_id,
-                account_name=manual_target,
-            ):
-                _logger.warning(
-                    "Manual Codex provider switch rejected for %s -> %s",
-                    session_id,
-                    manual_target,
-                )
+            if not _bind_manual_account(live_pool, session_id=session_id, account_name=manual_target):
                 clear_rotation_request(bridge_dir)
                 continue
-            clear_rotation_request(bridge_dir)
-            _logger.info(
-                "Manually switching Codex subscription for %s: %s -> %s",
-                session_id,
-                current_account,
-                manual_target,
+            next_account = live_pool._by_name(manual_target)
+        else:
+            retry_at = request.get("retry_at")
+            retry_at_int = int(retry_at) if isinstance(retry_at, (int, float)) else None
+            if retry_at_int is None and runtime.get("mode") == "codex":
+                retry_at_int = await _read_current_retry_at(
+                    bridge_dir, rotate_at_percent=live_pool.config.rotate_at_percent
+                )
+            next_account = live_pool.rotate_session(
+                session_id, exhausted_account=current_account, retry_at=retry_at_int,
+                reason="subscription quota reached",
             )
-            await relaunch()
-            continue
-
-        retry_at = request.get("retry_at")
-        retry_at_int = int(retry_at) if isinstance(retry_at, (int, float)) else None
-        if retry_at_int is None:
-            retry_at_int = await _read_current_retry_at(
-                bridge_dir, rotate_at_percent=live_pool.config.rotate_at_percent
-            )
-
-        replay_required = bool(request.get("replay_required"))
-        next_account = live_pool.rotate_session(
-            session_id,
-            exhausted_account=current_account,
-            retry_at=retry_at_int,
-            reason=str(request.get("reason") or "usage limit"),
-        )
         clear_rotation_request(bridge_dir)
-
-        if next_account is not None:
-            _logger.info(
-                "Rotating Codex subscription for %s: %s -> %s",
-                session_id,
-                current_account,
-                next_account.name,
-            )
-            await relaunch()
-            if replay_required:
-                await _continue_codex_after_relaunch(bridge_dir)
+        if next_account is None:
+            record_runtime_account(bridge_dir, session_id=session_id, account_name=current_account,
+                                   provider="exhausted", phase="exhausted")
+            exhausted = read_runtime(bridge_dir) or {}
+            exhausted["active_provider"] = active_provider
+            exhausted["detail"] = "All configured subscriptions are cooling down or need sign-in."
+            from omnigent.codex_account_pool import RUNTIME_FILE
+            _atomic_json(bridge_dir / RUNTIME_FILE, exhausted)
             continue
-
-        fallback_name = live_pool.config.claude_fallback_agent
-        if fallback_name is None:
-            record_runtime_fallback(
-                bridge_dir,
-                session_id=session_id,
-                mode="exhausted",
-                detail=(
-                    "All configured Codex subscriptions are currently exhausted "
-                    "and no Claude fallback is configured"
-                ),
-            )
-            return
-
+        if next_account.provider == active_provider:
+            await relaunch()
+            if not manual and request.get("replay_required"):
+                if next_account.provider == "codex":
+                    await _continue_codex_after_relaunch(bridge_dir)
+                elif server_client is not None:
+                    await _continue_session(server_client, session_id)
+            continue
         record_runtime_fallback(
-            bridge_dir,
-            session_id=session_id,
-            mode="claude_pending",
-            detail=fallback_name,
+            bridge_dir, session_id=session_id, mode=next_account.provider + "_pending",
         )
-        await _fallback_to_claude_when_idle(
-            session_id=session_id,
-            bridge_dir=bridge_dir,
-            server_client=server_client,
-            fallback_name=fallback_name,
+        if _MONITORS.get(session_id) is asyncio.current_task():
+            _MONITORS.pop(session_id, None)
+        await switch_to_account(
+            session_id=session_id, bridge_dir=bridge_dir, server_client=server_client,
+            profile=next_account, continue_after_switch=not manual,
         )
         return
+
+
+async def _wait_idle(bridge_dir: Path, mode: object, client: httpx.AsyncClient | None, session_id: str) -> bool:
+    if mode == "codex":
+        return await _wait_codex_idle(bridge_dir)
+    if client is None:
+        return False
+    encoded = urllib.parse.quote(session_id, safe="")
+    for _ in range(480):
+        response = await client.get(f"/v1/sessions/{encoded}", timeout=5.0)
+        response.raise_for_status()
+        if response.json().get("status") != "running":
+            return True
+        await asyncio.sleep(0.25)
+    return False
 
 
 async def _read_current_retry_at(
@@ -322,98 +281,46 @@ async def _continue_codex_after_relaunch(bridge_dir: Path) -> None:
     _logger.error("Timed out continuing Codex after account rotation: %s", bridge_dir)
 
 
-async def _fallback_to_claude_when_idle(
-    *,
-    session_id: str,
-    bridge_dir: Path,
-    server_client: httpx.AsyncClient | None,
-    fallback_name: str,
-    continue_after_switch: bool = True,
+async def _continue_session(client: httpx.AsyncClient, session_id: str) -> None:
+    encoded = urllib.parse.quote(session_id, safe="")
+    body = {"type": "message", "data": {"role": "user", "content": [{"type": "input_text", "text": _CONTINUE_TEXT}]}}
+    for _ in range(20):
+        response = await client.post(f"/v1/sessions/{encoded}/events", json=body, timeout=20.0)
+        if response.status_code not in {409, 503}:
+            response.raise_for_status()
+            return
+        await asyncio.sleep(0.5)
+    response.raise_for_status()
+
+
+async def switch_to_account(
+    *, session_id: str, bridge_dir: Path, server_client: httpx.AsyncClient | None,
+    profile: AccountProfile, continue_after_switch: bool = True,
 ) -> None:
     if server_client is None:
-        record_runtime_fallback(
-            bridge_dir,
-            session_id=session_id,
-            mode="exhausted",
-            detail="No server client available for Claude fallback",
-        )
+        record_runtime_fallback(bridge_dir, session_id=session_id, mode="exhausted", detail="Session service is unavailable.")
         return
-
     encoded = urllib.parse.quote(session_id, safe="")
     try:
-        idle = False
-        for _ in range(120):
-            response = await server_client.get(f"/v1/sessions/{encoded}", timeout=5.0)
-            if response.status_code == 404:
-                raise RuntimeError("session disappeared before Claude fallback")
-            response.raise_for_status()
-            payload = response.json()
-            if isinstance(payload, dict) and payload.get("status") != "running":
-                idle = True
-                break
-            await asyncio.sleep(0.25)
-        if not idle:
-            raise RuntimeError("session did not become idle for Claude fallback")
-
+        if not await _wait_idle(bridge_dir, "switch", server_client, session_id):
+            raise RuntimeError("Session did not become idle.")
         response = await server_client.get("/v1/agents", params={"limit": 100}, timeout=10.0)
         response.raise_for_status()
-        payload = response.json()
-        agents = payload.get("data", []) if isinstance(payload, dict) else []
-        target = next(
-            (
-                agent
-                for agent in agents
-                if isinstance(agent, dict) and agent.get("name") == fallback_name
-            ),
-            None,
-        )
+        agents = response.json().get("data", [])
+        target = next((a for a in agents if a.get("name") == profile.provider + "-native-ui"), None)
         if target is None or not isinstance(target.get("id"), str):
-            raise RuntimeError(f"Claude fallback agent {fallback_name!r} was not found")
-
+            raise RuntimeError("Requested provider is unavailable.")
         switched = await server_client.post(
-            f"/v1/sessions/{encoded}/switch-agent",
-            json={"agent_id": target["id"]},
-            timeout=20.0,
+            f"/v1/sessions/{encoded}/switch-agent", json={"agent_id": target["id"]}, timeout=20.0,
         )
         switched.raise_for_status()
+        record_runtime_account(bridge_dir, session_id=session_id, account_name=profile.name,
+                               provider=profile.provider, phase="selected")
+        if continue_after_switch:
+            await _continue_session(server_client, session_id)
+    except Exception:
+        _logger.error("Subscription switch failed")
         record_runtime_fallback(
-            bridge_dir,
-            session_id=session_id,
-            mode="claude",
-            detail=fallback_name,
-        )
-        if not continue_after_switch:
-            return
-
-        body = {
-            "type": "message",
-            "data": {
-                "role": "user",
-                "content": [{"type": "input_text", "text": _CONTINUE_TEXT}],
-            },
-        }
-        last_error: Exception | None = None
-        for _ in range(20):
-            try:
-                resumed = await server_client.post(
-                    f"/v1/sessions/{encoded}/events",
-                    json=body,
-                    timeout=10.0,
-                )
-                if resumed.status_code < 400:
-                    return
-                last_error = RuntimeError(
-                    f"Claude continuation returned HTTP {resumed.status_code}"
-                )
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-            await asyncio.sleep(0.5)
-        raise RuntimeError(f"Claude switched but continuation failed: {last_error}")
-    except Exception as exc:  # noqa: BLE001
-        _logger.exception("Claude fallback failed for %s", session_id)
-        record_runtime_fallback(
-            bridge_dir,
-            session_id=session_id,
-            mode="exhausted",
-            detail=str(exc),
+            bridge_dir, session_id=session_id, mode="exhausted",
+            detail="Account switch failed. Check account sign-in and session service, then retry.",
         )

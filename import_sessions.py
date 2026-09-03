@@ -73,6 +73,10 @@ def claude_homes() -> list[Path]:
     env_home = os.environ.get("CLAUDE_CONFIG_DIR")
     if env_home:
         homes.append(Path(env_home))
+    config = read_json(POOL_CONFIG)
+    for account in config.get("accounts", []):
+        if isinstance(account, dict) and account.get("provider") == "claude" and isinstance(account.get("config_dir"), str):
+            homes.append(Path(account["config_dir"]).expanduser())
     future_root = HOME / ".omnigent" / "claude-accounts"
     if future_root.is_dir():
         homes.extend(path for path in future_root.iterdir() if path.is_dir())
