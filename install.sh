@@ -27,9 +27,32 @@ ensure_brew_pkg() {
   brew install "${pkg}"
 }
 
+tailscale_installed() {
+  command -v tailscale >/dev/null 2>&1 \
+    || [[ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]] \
+    || [[ -x "${HOME}/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]
+}
+
+ensure_tailscale() {
+  if tailscale_installed; then
+    return 0
+  fi
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "ERROR: Tailscale is missing and Homebrew is unavailable." >&2
+    exit 1
+  fi
+  echo "Installing Tailscale..."
+  brew install --cask tailscale-app
+  if ! tailscale_installed; then
+    echo "ERROR: Tailscale installation completed but the app/CLI could not be found." >&2
+    exit 1
+  fi
+}
+
 ensure_brew_pkg git git
 ensure_brew_pkg uv uv
 ensure_brew_pkg tmux tmux
+ensure_tailscale
 
 if ! command -v codex >/dev/null 2>&1; then
   echo "ERROR: Codex CLI is required. Install Codex first." >&2
@@ -85,6 +108,7 @@ python3 "${HERE}/import_sessions.py" --self-test
 python3 -m py_compile \
   "${HERE}/status_server.py" \
   "${HERE}/status_server_ext.py" \
+  "${HERE}/remote_access.py" \
   "${HERE}/switch_provider.py" \
   "${HERE}/import_sessions.py"
 
@@ -108,6 +132,7 @@ cp "${HERE}/configure_subscriptions.py" "${BASE}/configure_subscriptions.py"
 cp "${HERE}/diagnose.py" "${BASE}/diagnose.py"
 cp "${HERE}/status_server.py" "${BASE}/status_server.py"
 cp "${HERE}/status_server_ext.py" "${BASE}/status_server_ext.py"
+cp "${HERE}/remote_access.py" "${BASE}/remote_access.py"
 cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
 cp "${HERE}/switch_provider.py" "${BASE}/switch_provider.py"
 cp "${HERE}/import_sessions.py" "${BASE}/import_sessions.py"
@@ -116,6 +141,7 @@ chmod 700 \
   "${BASE}/diagnose.py" \
   "${BASE}/status_server.py" \
   "${BASE}/status_server_ext.py" \
+  "${BASE}/remote_access.py" \
   "${BASE}/dashboard.html" \
   "${BASE}/switch_provider.py" \
   "${BASE}/import_sessions.py"
@@ -173,6 +199,7 @@ echo "Compatibility aliases are still installed:"
 echo "  omni-rotate codex / omni-rotate-test / omni-rotate-status / omni-rotate-accounts"
 echo
 echo "Your existing normal 'omni' installation was NOT modified."
+echo "Tailscale is installed for optional tailnet-only dashboard access; sign in to Tailscale before enabling it in the dashboard."
 
 # Keep the dashboard available after the installer exits. If a dashboard is
 # already serving on the default port, reuse it; otherwise start one detached.
