@@ -51,8 +51,8 @@ When the route looks right, type `done` (or `confirm` / `finish`).
 Example today:
 
 ```text
-codex     -> sign in account 1
-codex     -> sign in account 2
+codex
+codex
 done
 ```
 
@@ -65,12 +65,9 @@ Later, after getting Claude Pro:
 Then:
 
 ```text
-claude    -> sign in Claude Pro
+claude
 done
 ```
-
-You can rerun the configurator later and add more Codex subscriptions without
-re-registering the existing ones.
 
 ## Run
 
@@ -84,27 +81,62 @@ The normal CLI remains available separately as:
 omni
 ```
 
-## Read-only status dashboard
+## Full read-only diagnostics
 
-Start the local dashboard with:
+Run the diagnostic script directly with:
+
+```bash
+~/.local/bin/omni-rotate-test
+```
+
+It reports explicit `[PASS]`, `[WARN]`, `[FAIL]`, and `[INFO]` lines and finishes
+with `READY`, `READY WITH WARNINGS`, or `NOT READY`.
+
+The diagnostic checks:
+
+- required commands and patched launchers;
+- patched Omnigent executable and all rotation integration points;
+- synthetic A -> B rotation using the real pool implementation without touching
+  your real state;
+- current and legacy quota payload parsing plus `usageLimitExceeded` detection;
+- every configured Codex account auth file and file permissions;
+- every account with the official `codex login status` command under its own
+  isolated `CODEX_HOME`;
+- duplicate account identities;
+- current selected account and cooldown state;
+- Claude fallback when configured;
+- when an Omni Route Codex session is running, the live bridge account binding
+  and read-only Codex `account/read` + `account/rateLimits/read` RPCs.
+
+No model turn is sent by the diagnostic, and it does not modify route config,
+cooldowns, or subscription credentials. If no live Codex session exists, the
+live app-server check is a warning rather than a failure.
+
+## Local status dashboard
+
+Start the dashboard with:
 
 ```bash
 ~/.local/bin/omni-rotate-status
 ```
 
-It opens `http://127.0.0.1:8787/` and refreshes every two seconds. The page has a
-minimal black/green terminal-style UI and shows:
+It opens `http://127.0.0.1:8787/` and refreshes every two seconds. The Matrix-style
+page shows:
 
 - configured Codex accounts and their order;
+- account email when it can be read from the local auth metadata/JWT payload;
 - current/ready/cooldown/missing-auth state;
 - cooldown reset countdowns when known;
 - current active account and rotation threshold;
 - Claude fallback configuration/auth status;
 - patched runtime, normal `omni` CLI, and Desktop app presence.
 
-The server binds only to `127.0.0.1`, exposes only GET/HEAD endpoints, returns
-HTTP 405 for write methods, and does not return OAuth/JWT contents, account auth
-file paths, or other credential data.
+The page includes **RUN FULL TEST**, which runs the same read-only diagnostic and
+renders its PASS/WARN/FAIL output in a Matrix-style terminal panel.
+
+The server binds only to `127.0.0.1`. Status and diagnostics use GET/HEAD only;
+POST/PUT/PATCH/DELETE return HTTP 405. The status API may expose your own account
+email, but never returns OAuth/JWT token contents or auth file paths.
 
 Options:
 
@@ -138,12 +170,9 @@ hooks and workspace/session state.
 
 The route currently supports one Claude Pro fallback, because Omnigent's native
 Claude harness uses the active Claude Code CLI login. Codex subscription slots
-are unlimited. Multi-Claude-account pooling would be a separate runtime feature,
-not merely an installer change.
+are unlimited. Multi-Claude-account pooling would be a separate runtime feature.
 
 ## Full macOS cleanup
-
-To completely remove Omnigent + Omni Route from the Mac:
 
 ```bash
 ./uninstall_all.sh
@@ -156,9 +185,9 @@ It requires typing `DELETE`. For non-interactive use:
 ```
 
 This removes the normal Omnigent CLI, Desktop app and Desktop data,
-`~/.omnigent`, Omni Route runtime/account profiles, Omnigent backups,
-`~/omnigent`, and this cloned `omni-route` repository after verifying its Git
-origin.
+`~/.omnigent`, Omni Route runtime/account profiles, diagnostic/status launchers,
+Omnigent backups, `~/omnigent`, and this cloned `omni-route` repository after
+verifying its Git origin.
 
 It intentionally keeps shared developer tools and unrelated coding CLIs:
 Homebrew, Git, `uv`, `tmux`, Node, Codex CLI and Claude CLI.
