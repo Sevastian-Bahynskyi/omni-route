@@ -6,11 +6,30 @@ registered Codex subscription accounts. Claude Pro is an optional final fallback
 It uses official CLI subscription authentication. It does not turn ChatGPT Plus
 or Claude Pro into API keys.
 
-## Install
+## Full macOS install
+
+From a fresh clone, this installs the normal Omnigent CLI, the current Omnigent
+Desktop app, and Omni Route:
 
 ```bash
-unzip omnigent-subscription-rotation-v1.1.zip
-cd omnigent-subscription-rotation-v1
+git clone git@github.com:Sevastian-Bahynskyi/omni-route.git
+cd omni-route
+./install_all.sh
+```
+
+The script uses Homebrew for missing shared prerequisites, Omnigent's official
+CLI installer, and Omnigent's official macOS DMG download. It then runs the
+Omni Route installer and subscription configurator.
+
+Shared tools such as Homebrew, Git, `uv`, `tmux`, Node and Codex CLI are treated
+as machine-level dependencies rather than Omnigent-owned files.
+
+## Omni Route only
+
+If the normal Omnigent CLI/Desktop app are already installed and you only want
+the routing extension:
+
+```bash
 ./install.sh
 ```
 
@@ -59,8 +78,11 @@ re-registering the existing ones.
 ~/.local/bin/omni-rotate codex
 ```
 
-Your original global `omni` installation and the Omnigent Desktop app are left
-untouched.
+The normal CLI remains available separately as:
+
+```bash
+omni
+```
 
 ## Routing behavior
 
@@ -90,11 +112,33 @@ Claude harness uses the active Claude Code CLI login. Codex subscription slots
 are unlimited. Multi-Claude-account pooling would be a separate runtime feature,
 not merely an installer change.
 
-## Uninstall patched copy
+## Full macOS cleanup
+
+To completely remove Omnigent + Omni Route from the Mac:
+
+```bash
+./uninstall_all.sh
+```
+
+It requires typing `DELETE`. For non-interactive use:
+
+```bash
+./uninstall_all.sh --yes
+```
+
+This removes the normal Omnigent CLI, Desktop app and Desktop data,
+`~/.omnigent`, Omni Route runtime/account profiles, Omnigent backups,
+`~/omnigent`, and this cloned `omni-route` repository after verifying its Git
+origin.
+
+It intentionally keeps shared developer tools and unrelated coding CLIs:
+Homebrew, Git, `uv`, `tmux`, Node, Codex CLI and Claude CLI.
+
+## Uninstall Omni Route only
 
 ```bash
 ./uninstall.sh
 ```
 
-This leaves your normal Omnigent installation and registered subscription login
+This leaves the normal Omnigent installation and registered subscription login
 profiles untouched.
