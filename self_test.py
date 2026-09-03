@@ -160,7 +160,7 @@ def test_optional_claude_config(tmp: Path) -> None:
 
 def test_wait(tmp: Path) -> None:
     bridge = tmp / "wait-bridge"
-    bridge.mkdin()
+    bridge.mkdir()
     record_runtime_account(bridge, session_id="s", account_name="a")
 
     async def scenario() -> None:
