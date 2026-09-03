@@ -129,8 +129,6 @@ chmod 755 \
   "${BIN}/omni-rotate-test" \
   "${BIN}/omni-rotate-status"
 
-# Persist ~/.local/bin in normal macOS shells and make omni-rotate available
-# immediately in the current shell through Homebrew's already-on-PATH bin dir.
 omni_route_add_path
 omni_route_install_brew_shim
 
@@ -142,12 +140,21 @@ echo "============================================================"
 echo "INSTALL COMPLETE"
 echo "============================================================"
 echo "Use Omni Route from any directory:"
-echo "  omni-rotate codex"
+echo "  omni-rotate start"
 echo "  omni-rotate test"
 echo "  omni-rotate status"
 echo "  omni-rotate accounts"
 echo
 echo "Compatibility aliases are still installed:"
-echo "  omni-rotate-test / omni-rotate-status / omni-rotate-accounts"
+echo "  omni-rotate codex / omni-rotate-test / omni-rotate-status / omni-rotate-accounts"
 echo
 echo "Your existing normal 'omni' installation was NOT modified."
+
+# Restart the installed dashboard so it always uses the just-installed server
+# code, then open it after the installer has completed successfully.
+DASHBOARD_URL="http://127.0.0.1:8787/"
+pkill -f "${BASE}/status_server.py" >/dev/null 2>&1 || true
+nohup "${BIN}/omni-rotate" status --no-open >"${BASE}/status-dashboard.log" 2>&1 </dev/null &
+sleep 0.7
+echo "Opening Omni Route dashboard: ${DASHBOARD_URL}"
+open "${DASHBOARD_URL}" >/dev/null 2>&1 || true
