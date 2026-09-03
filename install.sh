@@ -39,8 +39,6 @@ uv python install 3.12 >/dev/null
 
 mkdir -p "${BASE}" "${BIN}"
 
-# Keep the previous patched checkout as one rollback copy until the new one
-# has passed validation.
 rm -rf "${SRC}.previous"
 if [[ -d "${SRC}" ]]; then
   mv "${SRC}" "${SRC}.previous"
@@ -94,7 +92,6 @@ echo "Compiling patched modules..."
     omnigent/runner/native/orchestration.py
 )
 
-# Verify the actual installed entry point before asking for account logins.
 "${SRC}/.venv/bin/omni" --version >/dev/null
 
 "${HERE}/setup_accounts.sh"
@@ -114,12 +111,21 @@ exec python3 "${BASE}/configure_subscriptions.py" "\$@"
 EOF_ACCOUNTS
 chmod +x "${BIN}/omni-rotate-accounts"
 
+cp "${HERE}/diagnose.py" "${BASE}/diagnose.py"
+chmod 700 "${BASE}/diagnose.py"
+cat > "${BIN}/omni-rotate-test" <<EOF_TEST
+#!/bin/sh
+exec python3 -S "${BASE}/diagnose.py" "\$@"
+EOF_TEST
+chmod +x "${BIN}/omni-rotate-test"
+
 cp "${HERE}/status_server.py" "${BASE}/status_server.py"
-chmod 700 "${BASE}/status_server.py"
+cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
+chmod 700 "${BASE}/status_server.py" "${BASE}/dashboard.html"
 
 cat > "${BIN}/omni-rotate-status" <<EOF_STATUS
 #!/bin/sh
-exec python3 "${BASE}/status_server.py" "\$@"
+exec python3 -S "${BASE}/status_server.py" "\$@"
 EOF_STATUS
 chmod +x "${BIN}/omni-rotate-status"
 
@@ -132,7 +138,9 @@ echo "INSTALL COMPLETE"
 echo "============================================================"
 echo "Run patched Omnigent with:"
 echo "  ${BIN}/omni-rotate codex"
-echo "Read-only status dashboard:"
+echo "Run full diagnostics with:"
+echo "  ${BIN}/omni-rotate-test"
+echo "Status dashboard + diagnostic terminal:"
 echo "  ${BIN}/omni-rotate-status"
 echo
 echo "Your existing normal 'omni' installation was NOT modified."
