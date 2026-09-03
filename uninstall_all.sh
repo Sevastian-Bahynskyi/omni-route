@@ -42,6 +42,7 @@ echo "Stopping Omnigent Desktop and local processes..."
 osascript -e 'tell application "Omnigent" to quit' >/dev/null 2>&1 || true
 pkill -f '/Omnigent[^/]*/Contents/MacOS/' >/dev/null 2>&1 || true
 pkill -f "$HOME/.local/share/omnigent-subscription-rotation/omnigent" >/dev/null 2>&1 || true
+pkill -f "$HOME/.local/share/omnigent-subscription-rotation/status_server.py" >/dev/null 2>&1 || true
 sleep 1
 
 bundle_ids=()
@@ -136,5 +137,5 @@ fi
 
 echo
 echo "Full Omnigent + Omni Route cleanup complete."
-echo "Omni Route PATH entries and command shim were removed."
+echo "Omni Route dashboard process, PATH entries and command shim were removed."
 echo "Kept shared tools: Homebrew, Git, uv, tmux, Node, Codex CLI, Claude CLI."
