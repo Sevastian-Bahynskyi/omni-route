@@ -3,6 +3,7 @@ set -euo pipefail
 rm -f \
   "${HOME}/.local/bin/omni-rotate" \
   "${HOME}/.local/bin/omni-rotate-accounts" \
+  "${HOME}/.local/bin/omni-rotate-test" \
   "${HOME}/.local/bin/omni-rotate-status"
 rm -rf "${HOME}/.local/share/omnigent-subscription-rotation"
 echo "Patched Omnigent / Omni Route removed."
