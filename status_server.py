@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import webbrowser
@@ -93,6 +94,56 @@ def _email_from_auth(path: Path | None) -> str | None:
         return None
 
     return walk(data)
+
+
+def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def update_route_order(names: list[str]) -> dict[str, Any]:
+    config = _read_json(CONFIG_PATH)
+    accounts = config.get("accounts")
+    if not isinstance(accounts, list) or not accounts:
+        raise ValueError("no Codex accounts are configured")
+
+    configured: dict[str, dict[str, Any]] = {}
+    for item in accounts:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise ValueError("account pool configuration is invalid")
+        name = item["name"]
+        if name in configured:
+            raise ValueError("account names are not unique")
+        configured[name] = item
+
+    if len(names) != len(configured) or len(set(names)) != len(names):
+        raise ValueError("route order must contain every configured account exactly once")
+    if set(names) != set(configured):
+        raise ValueError("route order contains unknown or missing accounts")
+
+    config["accounts"] = [configured[name] for name in names]
+    _atomic_write_json(CONFIG_PATH, config)
+
+    # Existing bound sessions keep their account. Clearing the global preference
+    # makes the new configured order control the next unbound selection/rotation.
+    state = _read_json(STATE_PATH)
+    if state:
+        state.pop("current_account", None)
+        _atomic_write_json(STATE_PATH, state)
+    return collect_status()
 
 
 def _command_ok(command: list[str], timeout: float = 2.0) -> bool | None:
@@ -250,7 +301,7 @@ def _load_dashboard() -> str:
 
 
 class StatusHandler(BaseHTTPRequestHandler):
-    server_version = "OmniRouteStatus/1.1"
+    server_version = "OmniRouteStatus/1.2"
 
     def log_message(self, fmt: str, *args: object) -> None:
         return
@@ -296,19 +347,65 @@ class StatusHandler(BaseHTTPRequestHandler):
         else:
             self._headers("text/plain; charset=utf-8", 0, 404)
 
-    def _readonly(self) -> None:
-        body = b"read only\n"
+    def _json_body(self, max_bytes: int = 16384) -> dict[str, Any]:
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise ValueError("Content-Type must be application/json")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("invalid Content-Length") from exc
+        if length <= 0 or length > max_bytes:
+            raise ValueError("invalid request size")
+        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("JSON body must be an object")
+        return value
+
+    def _same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = self.headers.get("Host", "")
+        return origin in {f"http://{host}", f"http://localhost:{self.server.server_port}", f"http://127.0.0.1:{self.server.server_port}"}
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path != "/api/route/order":
+            body = b"method not allowed\n"
+            self._headers("text/plain; charset=utf-8", len(body), 405)
+            self.wfile.write(body)
+            return
+        if not self._same_origin():
+            body = b"forbidden\n"
+            self._headers("text/plain; charset=utf-8", len(body), 403)
+            self.wfile.write(body)
+            return
+        try:
+            request = self._json_body()
+            names = request.get("accounts")
+            if not isinstance(names, list) or not all(isinstance(name, str) and name for name in names):
+                raise ValueError("accounts must be a list of account names")
+            payload = {"ok": True, "status": update_route_order(names)}
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            self._headers("application/json; charset=utf-8", len(body), 200)
+        except (ValueError, json.JSONDecodeError) as exc:
+            body = json.dumps({"ok": False, "error": str(exc)}, separators=(",", ":")).encode("utf-8")
+            self._headers("application/json; charset=utf-8", len(body), 400)
+        self.wfile.write(body)
+
+    def _method_not_allowed(self) -> None:
+        body = b"method not allowed\n"
         self._headers("text/plain; charset=utf-8", len(body), 405)
         self.wfile.write(body)
 
-    do_POST = _readonly
-    do_PUT = _readonly
-    do_PATCH = _readonly
-    do_DELETE = _readonly
+    do_PUT = _method_not_allowed
+    do_PATCH = _method_not_allowed
+    do_DELETE = _method_not_allowed
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read-only Omni Route localhost status dashboard")
+    parser = argparse.ArgumentParser(description="Omni Route localhost route dashboard")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-open", action="store_true", help="Do not open the browser automatically")
     args = parser.parse_args()
@@ -318,7 +415,7 @@ def main() -> None:
     server = ThreadingHTTPServer((HOST, args.port), StatusHandler)
     url = f"http://{HOST}:{args.port}/"
     print(f"Omni Route status: {url}")
-    print("Local-only status + read-only diagnostics. Ctrl+C to stop.")
+    print("Local route dashboard. Ctrl+C to stop.")
     if not args.no_open:
         threading.Timer(0.25, lambda: webbrowser.open(url)).start()
     try:
