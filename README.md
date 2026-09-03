@@ -5,6 +5,8 @@ session across multiple ChatGPT/Codex subscription accounts and can optionally
 fall back to Claude Pro. It uses the official Codex/Claude CLI subscription
 logins; it does not convert subscriptions into API keys.
 
+> **Coding agents:** read [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md) completely before modifying this repository. It contains the canonical product context, architecture decisions, invariants, testing expectations, and repository workflow.
+
 ## Full install
 
 ```bash
