@@ -74,11 +74,7 @@ class PoolConfig:
         if not isinstance(threshold, (int, float)) or not 0 < float(threshold) <= 100:
             raise AccountPoolError("rotate_at_percent must be > 0 and <= 100")
         fallback_raw = raw.get("claude_fallback_agent")
-        fallback = (
-            fallback_raw.strip()
-            if isinstance(fallback_raw, str) and fallback_raw.strip()
-            else None
-        )
+        fallback = fallback_raw.strip() if isinstance(fallback_raw, str) and fallback_raw.strip() else None
         return cls(
             accounts=tuple(accounts),
             rotate_at_percent=float(threshold),
@@ -100,13 +96,7 @@ class CodexRequestClient(Protocol):
 
 
 class CodexAccountPool:
-    def __init__(
-        self,
-        config: PoolConfig,
-        *,
-        state_path: Path = STATE_PATH,
-        now: Any = time.time,
-    ) -> None:
+    def __init__(self, config: PoolConfig, *, state_path: Path = STATE_PATH, now: Any = time.time) -> None:
         self.config = config
         self.state_path = state_path.expanduser()
         self._now = now
@@ -138,11 +128,7 @@ class CodexAccountPool:
             bound = bindings.get(session_id)
             if isinstance(bound, str):
                 profile = self._by_name(bound)
-                if (
-                    profile is not None
-                    and auth_json_has_credential(profile.auth_json)
-                    and self._available(state, bound, now)
-                ):
+                if profile is not None and auth_json_has_credential(profile.auth_json) and self._available(state, bound, now):
                     return profile
             account = self._choose(state, now)
             if account is None:
@@ -152,14 +138,7 @@ class CodexAccountPool:
             state["current_account"] = account.name
             return account
 
-    def rotate_session(
-        self,
-        session_id: str,
-        *,
-        exhausted_account: str | None,
-        retry_at: int | None,
-        reason: str,
-    ) -> AccountProfile | None:
+    def rotate_session(self, session_id: str, *, exhausted_account: str | None, retry_at: int | None, reason: str) -> AccountProfile | None:
         if not self.enabled:
             return None
         now = int(self._now())
@@ -171,11 +150,7 @@ class CodexAccountPool:
                     "reason": reason,
                     "marked_at": now,
                 }
-            account = self._choose(
-                state,
-                now,
-                exclude={exhausted_account} if exhausted_account else set(),
-            )
+            account = self._choose(state, now, exclude={exhausted_account} if exhausted_account else set())
             bindings = state.setdefault("session_bindings", {})
             if account is None:
                 bindings.pop(session_id, None)
@@ -191,29 +166,13 @@ class CodexAccountPool:
     def _by_name(self, name: str) -> AccountProfile | None:
         return next((a for a in self.config.accounts if a.name == name), None)
 
-    def _choose(
-        self,
-        state: dict[str, Any],
-        now: int,
-        *,
-        exclude: set[str] | None = None,
-    ) -> AccountProfile | None:
+    def _choose(self, state: dict[str, Any], now: int, *, exclude: set[str] | None = None) -> AccountProfile | None:
+        """Choose the first available account in configured route order."""
         exclude = exclude or set()
-        current = state.get("current_account")
-        if isinstance(current, str) and current not in exclude:
-            profile = self._by_name(current)
-            if (
-                profile is not None
-                and auth_json_has_credential(profile.auth_json)
-                and self._available(state, current, now)
-            ):
-                return profile
         for profile in self.config.accounts:
             if profile.name in exclude:
                 continue
-            if auth_json_has_credential(profile.auth_json) and self._available(
-                state, profile.name, now
-            ):
+            if auth_json_has_credential(profile.auth_json) and self._available(state, profile.name, now):
                 return profile
         return None
 
@@ -228,13 +187,7 @@ class CodexAccountPool:
     @staticmethod
     def _prune(state: dict[str, Any], now: int) -> None:
         cooldowns = state.setdefault("cooldowns", {})
-        expired = [
-            name
-            for name, value in cooldowns.items()
-            if isinstance(value, dict)
-            and isinstance(value.get("retry_at"), (int, float))
-            and int(value["retry_at"]) <= now
-        ]
+        expired = [name for name, value in cooldowns.items() if isinstance(value, dict) and isinstance(value.get("retry_at"), (int, float)) and int(value["retry_at"]) <= now]
         for name in expired:
             cooldowns.pop(name, None)
 
@@ -267,15 +220,9 @@ def auth_json_has_credential(path: Path) -> bool:
     if not isinstance(raw, dict):
         return False
     tokens = raw.get("tokens")
-    if isinstance(tokens, dict) and any(
-        isinstance(tokens.get(k), str) and bool(tokens.get(k).strip())
-        for k in ("access_token", "refresh_token", "id_token")
-    ):
+    if isinstance(tokens, dict) and any(isinstance(tokens.get(k), str) and bool(tokens.get(k).strip()) for k in ("access_token", "refresh_token", "id_token")):
         return True
-    return any(
-        isinstance(raw.get(k), str) and bool(raw.get(k).strip())
-        for k in ("OPENAI_API_KEY", "personal_access_token")
-    )
+    return any(isinstance(raw.get(k), str) and bool(raw.get(k).strip()) for k in ("OPENAI_API_KEY", "personal_access_token"))
 
 
 def bind_account_auth(private_codex_home: Path, source_auth_json: Path) -> None:
@@ -290,9 +237,7 @@ def bind_account_auth(private_codex_home: Path, source_auth_json: Path) -> None:
     target.symlink_to(source)
 
 
-def decide_rate_limits(
-    payload: Mapping[str, Any], *, rotate_at_percent: float
-) -> RateLimitDecision:
+def decide_rate_limits(payload: Mapping[str, Any], *, rotate_at_percent: float) -> RateLimitDecision:
     """Interpret both current and older Codex app-server quota payloads."""
     value: Any = payload
     if isinstance(value, Mapping) and isinstance(value.get("result"), Mapping):
@@ -300,30 +245,19 @@ def decide_rate_limits(
     if not isinstance(value, Mapping):
         return RateLimitDecision(False, None, None, "no rate-limit data")
 
-    # Current Codex shape:
-    # { ordinaryUsageAllowed, rateLimits: { primary, secondary, ... } }
-    # Older snapshots sometimes placed ordinaryUsageAllowed beside the windows.
     allowed = value.get("ordinaryUsageAllowed", value.get("ordinary_usage_allowed"))
     snapshot: Any = value.get("rateLimits", value.get("rate_limits", value))
     if not isinstance(snapshot, Mapping):
         snapshot = value
-
     if allowed is None:
-        allowed = snapshot.get(
-            "ordinaryUsageAllowed", snapshot.get("ordinary_usage_allowed")
-        )
-    spend_reached = snapshot.get(
-        "spendControlReached", snapshot.get("spend_control_reached")
-    )
-    reached_type = snapshot.get(
-        "rateLimitReachedType", snapshot.get("rate_limit_reached_type")
-    )
+        allowed = snapshot.get("ordinaryUsageAllowed", snapshot.get("ordinary_usage_allowed"))
+    spend_reached = snapshot.get("spendControlReached", snapshot.get("spend_control_reached"))
+    reached_type = snapshot.get("rateLimitReachedType", snapshot.get("rate_limit_reached_type"))
 
     max_used: float | None = None
     threshold_resets: list[int] = []
     all_resets: list[int] = []
     threshold_hit = False
-
     for key in ("primary", "secondary"):
         window = snapshot.get(key)
         if not isinstance(window, Mapping):
@@ -347,42 +281,17 @@ def decide_rate_limits(
                 threshold_resets.append(reset_int)
 
     if allowed is False:
-        return RateLimitDecision(
-            True,
-            max_used,
-            max(all_resets, default=None),
-            "Codex reports ordinary usage unavailable",
-        )
+        return RateLimitDecision(True, max_used, max(all_resets, default=None), "Codex reports ordinary usage unavailable")
     if bool(spend_reached):
-        return RateLimitDecision(
-            True,
-            max_used,
-            max(all_resets, default=None),
-            "Codex spend control reached",
-        )
+        return RateLimitDecision(True, max_used, max(all_resets, default=None), "Codex spend control reached")
     if isinstance(reached_type, str) and reached_type.strip():
-        return RateLimitDecision(
-            True,
-            max_used,
-            max(all_resets, default=None),
-            f"Codex rate limit reached ({reached_type})",
-        )
+        return RateLimitDecision(True, max_used, max(all_resets, default=None), f"Codex rate limit reached ({reached_type})")
     if threshold_hit:
-        return RateLimitDecision(
-            True,
-            max_used,
-            max(threshold_resets, default=None),
-            f"Codex usage reached {rotate_at_percent:g}% rotation threshold",
-        )
+        return RateLimitDecision(True, max_used, max(threshold_resets, default=None), f"Codex usage reached {rotate_at_percent:g}% rotation threshold")
     return RateLimitDecision(False, max_used, None, "Codex account available")
 
 
-async def preflight_rotation_request(
-    client: CodexRequestClient,
-    bridge_dir: Path,
-    *,
-    session_id: str,
-) -> tuple[bool, int]:
+async def preflight_rotation_request(client: CodexRequestClient, bridge_dir: Path, *, session_id: str) -> tuple[bool, int]:
     """Ask the runner to rotate before a new turn if quota is effectively spent."""
     config = PoolConfig.load()
     if not config.enabled:
@@ -398,27 +307,14 @@ async def preflight_rotation_request(
         response = await client.request("account/rateLimits/read", {})
         decision = decide_rate_limits(response, rotate_at_percent=config.rotate_at_percent)
     except Exception:
-        # Quota inspection is a convenience gate; protocol drift must fail open.
         return False, generation
     if not decision.rotate:
         return False, generation
-    request_rotation(
-        bridge_dir,
-        session_id=session_id,
-        account_name=account_name,
-        retry_at=decision.retry_at,
-        reason=decision.reason,
-        replay_required=False,
-    )
+    request_rotation(bridge_dir, session_id=session_id, account_name=account_name, retry_at=decision.retry_at, reason=decision.reason, replay_required=False)
     return True, generation
 
 
-async def wait_for_rotation(
-    bridge_dir: Path,
-    *,
-    after_generation: int,
-    timeout: float = ROTATION_WAIT_SECONDS,
-) -> dict[str, Any] | None:
+async def wait_for_rotation(bridge_dir: Path, *, after_generation: int, timeout: float = ROTATION_WAIT_SECONDS) -> dict[str, Any] | None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         runtime = read_runtime(bridge_dir)
@@ -432,9 +328,8 @@ def is_usage_limit_payload(value: object) -> bool:
     """Recognize Codex's structured quota error recursively."""
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if str(key).casefold() in {"codexerrorinfo", "codex_error_info"}:
-                if _contains_usage_variant(item):
-                    return True
+            if str(key).casefold() in {"codexerrorinfo", "codex_error_info"} and _contains_usage_variant(item):
+                return True
             if is_usage_limit_payload(item):
                 return True
         return False
@@ -445,23 +340,14 @@ def is_usage_limit_payload(value: object) -> bool:
 
 def _contains_usage_variant(value: object) -> bool:
     if isinstance(value, str):
-        # Codex currently serializes this enum as camelCase
-        # ("usageLimitExceeded"); older builds used snake_case.
         compact = "".join(ch for ch in value.casefold() if ch.isalnum())
-        return compact in {
-            "usagelimitexceeded",
-            "usagelimit",
-            "quotaexceeded",
-            "ratelimitexceeded",
-        }
+        return compact in {"usagelimitexceeded", "usagelimit", "quotaexceeded", "ratelimitexceeded"}
     if isinstance(value, Mapping):
         return any(_contains_usage_variant(v) for v in value.values())
     return False
 
 
-def request_rotation_from_usage_error(
-    bridge_dir: Path, *, session_id: str, payload: object
-) -> bool:
+def request_rotation_from_usage_error(bridge_dir: Path, *, session_id: str, payload: object) -> bool:
     if not is_usage_limit_payload(payload):
         return False
     runtime = read_runtime(bridge_dir)
@@ -470,49 +356,21 @@ def request_rotation_from_usage_error(
     account_name = runtime.get("account_name")
     if not isinstance(account_name, str):
         return False
-    request_rotation(
-        bridge_dir,
-        session_id=session_id,
-        account_name=account_name,
-        retry_at=None,
-        reason="usage_limit_exceeded",
-        replay_required=True,
-    )
+    request_rotation(bridge_dir, session_id=session_id, account_name=account_name, retry_at=None, reason="usage_limit_exceeded", replay_required=True)
     return True
 
 
 def record_runtime_account(bridge_dir: Path, *, session_id: str, account_name: str) -> int:
     previous = read_runtime(bridge_dir) or {}
     generation = int(previous.get("generation", 0)) + 1
-    _atomic_json(
-        bridge_dir / RUNTIME_FILE,
-        {
-            "session_id": session_id,
-            "mode": "codex",
-            "account_name": account_name,
-            "generation": generation,
-            "updated_at": int(time.time()),
-        },
-    )
+    _atomic_json(bridge_dir / RUNTIME_FILE, {"session_id": session_id, "mode": "codex", "account_name": account_name, "generation": generation, "updated_at": int(time.time())})
     return generation
 
 
-def record_runtime_fallback(
-    bridge_dir: Path, *, session_id: str, mode: str, detail: str | None = None
-) -> int:
+def record_runtime_fallback(bridge_dir: Path, *, session_id: str, mode: str, detail: str | None = None) -> int:
     previous = read_runtime(bridge_dir) or {}
     generation = int(previous.get("generation", 0)) + 1
-    _atomic_json(
-        bridge_dir / RUNTIME_FILE,
-        {
-            "session_id": session_id,
-            "mode": mode,
-            "account_name": None,
-            "generation": generation,
-            "detail": detail,
-            "updated_at": int(time.time()),
-        },
-    )
+    _atomic_json(bridge_dir / RUNTIME_FILE, {"session_id": session_id, "mode": mode, "account_name": None, "generation": generation, "detail": detail, "updated_at": int(time.time())})
     return generation
 
 
@@ -532,29 +390,11 @@ def read_runtime(bridge_dir: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def request_rotation(
-    bridge_dir: Path,
-    *,
-    session_id: str,
-    account_name: str,
-    retry_at: int | None,
-    reason: str,
-    replay_required: bool,
-) -> None:
+def request_rotation(bridge_dir: Path, *, session_id: str, account_name: str, retry_at: int | None, reason: str, replay_required: bool) -> None:
     path = bridge_dir / ROTATE_FILE
     if path.exists():
         return
-    _atomic_json(
-        path,
-        {
-            "session_id": session_id,
-            "account_name": account_name,
-            "retry_at": retry_at,
-            "reason": reason,
-            "replay_required": replay_required,
-            "requested_at": int(time.time()),
-        },
-    )
+    _atomic_json(path, {"session_id": session_id, "account_name": account_name, "retry_at": retry_at, "reason": reason, "replay_required": replay_required, "requested_at": int(time.time())})
 
 
 def read_rotation_request(bridge_dir: Path) -> dict[str, Any] | None:
