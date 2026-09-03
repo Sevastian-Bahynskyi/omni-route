@@ -103,6 +103,7 @@ The importer:
   titles, workspaces and resumable external session IDs;
 - creates/reuses first-class Omnigent projects by transcript workspace/cwd, so
   sessions from the same repository are grouped together;
+- excludes Codex subagent sessions by session metadata and Claude subagent transcripts;
 - deduplicates shared Codex thread IDs across different account homes;
 - when shared copies differ, normalizes all copies and keeps the richest
   transcript (most items, then newest/largest copy);

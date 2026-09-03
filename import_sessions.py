@@ -83,7 +83,29 @@ def claude_homes() -> list[Path]:
     return _dedupe_paths(homes)
 
 
-def discover_candidates() -> tuple[list[list[Candidate]], int]:
+def is_codex_subagent(path: Path) -> bool:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for index, line in enumerate(handle):
+                if index >= 64:
+                    break
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "session_meta":
+                    continue
+                metadata = record.get("payload")
+                source = metadata.get("source") if isinstance(metadata, dict) else None
+                if isinstance(source, dict):
+                    return any(key.casefold().replace("_", "") == "subagent" for key in source)
+                return isinstance(source, str) and source.casefold().replace("_", "") == "subagent"
+    except (OSError, UnicodeError):
+        pass
+    return False
+
+
+def discover_candidates(*, include_codex_subagents: bool = False) -> tuple[list[list[Candidate]], int]:
     groups: dict[tuple[str, str], list[Candidate]] = {}
 
     for home in codex_homes():
@@ -122,6 +144,11 @@ def discover_candidates() -> tuple[list[list[Candidate]], int]:
             cand = Candidate("claude", session_id, home, path, stat.st_mtime, stat.st_size)
             groups.setdefault((cand.source, cand.session_id), []).append(cand)
 
+    if not include_codex_subagents:
+        groups = {
+            key: group for key, group in groups.items()
+            if key[0] != "codex" or not any(is_codex_subagent(copy.transcript) for copy in group)
+        }
     duplicate_copies = sum(max(0, len(group) - 1) for group in groups.values())
     ordered = sorted(
         groups.values(),
@@ -195,7 +222,7 @@ async def run_import() -> int:
 
     candidate_groups, duplicate_copies = discover_candidates()
     print("OMNI ROUTE // SESSION IMPORT")
-    print(f"Discovered unique sessions: {len(candidate_groups)}")
+    print(f"Discovered unique sessions (subagents excluded): {len(candidate_groups)}")
     print(f"Shared/duplicate transcript copies collapsed: {duplicate_copies}")
     if not candidate_groups:
         print("No Codex or Claude history found.")
@@ -351,11 +378,27 @@ def self_test() -> int:
             }),
             encoding="utf-8",
         )
+        child_id = "aaaaaaaa-1234-1234-1234-123456789abc"
+        child = homes[0] / "archived_sessions" / f"rollout-test-{child_id}.jsonl"
+        child.parent.mkdir(parents=True)
+        child.write_text(json.dumps({"type": "session_meta", "payload": {"source": {"subagent": {"thread_spawn": {}}}}}) + "\n")
+        assert is_codex_subagent(child)
+        normal = homes[0] / "archived_sessions" / f"rollout-test-{thread}.jsonl"
+        normal.write_text(json.dumps({"type": "session_meta", "payload": {"source": "vscode"}}) + "\n")
+        assert not is_codex_subagent(normal)
+        assert len(discover_candidates(include_codex_subagents=True)[0]) == 2
         groups, duplicate_copies = discover_candidates()
         codex_groups = [g for g in groups if g and g[0].source == "codex"]
         assert len(codex_groups) == 1
-        assert len(codex_groups[0]) == 2
-        assert duplicate_copies == 1
+        assert len(codex_groups[0]) == 3
+        assert duplicate_copies == 2
+        duplicate_child = homes[1] / "sessions" / f"rollout-copy-{child_id}.jsonl"
+        duplicate_child.write_text("{}\n")
+        assert len(discover_candidates()[0]) == 1
+        claude_child = root / ".claude" / "projects" / "project" / "subagents" / "agent-test.jsonl"
+        claude_child.parent.mkdir(parents=True)
+        claude_child.write_text("{}\n")
+        assert len(discover_candidates()[0]) == 1
     HOME, POOL_CONFIG = old_home, old_pool
 
     print("session-import self-test: PASS")

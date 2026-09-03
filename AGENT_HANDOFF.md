@@ -691,3 +691,5 @@ A new agent should do this before giving architectural advice:
 If a new request appears inconsistent with this document, the user's new explicit request wins. Update this handoff file when a product-level invariant, command, architecture decision, or major capability changes so the next agent inherits the new reality.
 
 Account switches acknowledge selection before the next native turn starts; runtime phase `selected` distinguishes this from a launched account. Claude StopFailure `rate_limit` drives automatic rotation; unknown reset times use the conservative cooldown. Per-profile history is shared through the normal Claude projects directory, with original nonempty profile histories backed up before linking and conflicting files rejected.
+
+Session import excludes Codex subagents using `session_meta.payload.source.subagent`, including archived rollouts and all copies of a shared thread. Claude `subagents` directories remain excluded. Previously imported subagent copies may be archived in Omnigent without deleting their source transcripts.
