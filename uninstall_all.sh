@@ -78,7 +78,10 @@ fi
 rm -f "$HOME/.local/bin/omni" "$HOME/.local/bin/omnigent"
 
 # Remove Omni Route launchers/runtime and every Omnigent state directory.
-rm -f "$HOME/.local/bin/omni-rotate" "$HOME/.local/bin/omni-rotate-accounts"
+rm -f \
+  "$HOME/.local/bin/omni-rotate" \
+  "$HOME/.local/bin/omni-rotate-accounts" \
+  "$HOME/.local/bin/omni-rotate-status"
 rm -rf "$HOME/.local/share/omnigent-subscription-rotation"
 rm -rf "$HOME/.omnigent" "$HOME/.omnigent-backups" "$HOME/omnigent"
 
