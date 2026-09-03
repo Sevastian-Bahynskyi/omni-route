@@ -6,6 +6,7 @@ BASE="${HOME}/.local/share/omnigent-subscription-rotation"
 SRC="${BASE}/omnigent"
 BIN="${HOME}/.local/bin"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+source "${HERE}/path_helpers.sh"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "ERROR: this installer is currently packaged for macOS." >&2
@@ -34,6 +35,7 @@ if ! command -v codex >/dev/null 2>&1; then
   echo "ERROR: Codex CLI is required. Install Codex first." >&2
   exit 1
 fi
+
 echo "Ensuring Python 3.12 for Omnigent..."
 uv python install 3.12 >/dev/null
 
@@ -96,38 +98,41 @@ echo "Compiling patched modules..."
 
 "${HERE}/setup_accounts.sh"
 
-cat > "${BIN}/omni-rotate" <<EOF_LAUNCHER
-#!/bin/sh
-exec "${SRC}/.venv/bin/omni" "\$@"
-EOF_LAUNCHER
-chmod +x "${BIN}/omni-rotate"
-
 cp "${HERE}/configure_subscriptions.py" "${BASE}/configure_subscriptions.py"
-chmod 700 "${BASE}/configure_subscriptions.py"
-
-cat > "${BIN}/omni-rotate-accounts" <<EOF_ACCOUNTS
-#!/bin/sh
-exec python3 "${BASE}/configure_subscriptions.py" "\$@"
-EOF_ACCOUNTS
-chmod +x "${BIN}/omni-rotate-accounts"
-
 cp "${HERE}/diagnose.py" "${BASE}/diagnose.py"
-chmod 700 "${BASE}/diagnose.py"
-cat > "${BIN}/omni-rotate-test" <<EOF_TEST
-#!/bin/sh
-exec python3 -S "${BASE}/diagnose.py" "\$@"
-EOF_TEST
-chmod +x "${BIN}/omni-rotate-test"
-
 cp "${HERE}/status_server.py" "${BASE}/status_server.py"
 cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
-chmod 700 "${BASE}/status_server.py" "${BASE}/dashboard.html"
+chmod 700 \
+  "${BASE}/configure_subscriptions.py" \
+  "${BASE}/diagnose.py" \
+  "${BASE}/status_server.py" \
+  "${BASE}/dashboard.html"
 
+cp "${HERE}/omni_rotate.sh" "${BIN}/omni-rotate"
+chmod 755 "${BIN}/omni-rotate"
+
+# Backward-compatible aliases. New usage is `omni-rotate <subcommand>`.
+cat > "${BIN}/omni-rotate-accounts" <<EOF_ACCOUNTS
+#!/bin/sh
+exec "${BIN}/omni-rotate" accounts "\$@"
+EOF_ACCOUNTS
+cat > "${BIN}/omni-rotate-test" <<EOF_TEST
+#!/bin/sh
+exec "${BIN}/omni-rotate" test "\$@"
+EOF_TEST
 cat > "${BIN}/omni-rotate-status" <<EOF_STATUS
 #!/bin/sh
-exec python3 -S "${BASE}/status_server.py" "\$@"
+exec "${BIN}/omni-rotate" status "\$@"
 EOF_STATUS
-chmod +x "${BIN}/omni-rotate-status"
+chmod 755 \
+  "${BIN}/omni-rotate-accounts" \
+  "${BIN}/omni-rotate-test" \
+  "${BIN}/omni-rotate-status"
+
+# Persist ~/.local/bin in normal macOS shells and make omni-rotate available
+# immediately in the current shell through Homebrew's already-on-PATH bin dir.
+omni_route_add_path
+omni_route_install_brew_shim
 
 rm -rf "${SRC}.previous"
 trap - EXIT
@@ -136,11 +141,13 @@ echo
 echo "============================================================"
 echo "INSTALL COMPLETE"
 echo "============================================================"
-echo "Run patched Omnigent with:"
-echo "  ${BIN}/omni-rotate codex"
-echo "Run full diagnostics with:"
-echo "  ${BIN}/omni-rotate-test"
-echo "Status dashboard + diagnostic terminal:"
-echo "  ${BIN}/omni-rotate-status"
+echo "Use Omni Route from any directory:"
+echo "  omni-rotate codex"
+echo "  omni-rotate test"
+echo "  omni-rotate status"
+echo "  omni-rotate accounts"
+echo
+echo "Compatibility aliases are still installed:"
+echo "  omni-rotate-test / omni-rotate-status / omni-rotate-accounts"
 echo
 echo "Your existing normal 'omni' installation was NOT modified."

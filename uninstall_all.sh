@@ -2,6 +2,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${HERE}/path_helpers.sh"
 YES=false
 if [[ "${1:-}" == "--yes" ]]; then
   YES=true
@@ -22,6 +23,7 @@ This permanently removes Omnigent and Omni Route from this Mac, including:
   - Omnigent Desktop app and Desktop data
   - ~/.omnigent sessions, credentials and state
   - Omni Route patched runtime and registered Codex account profiles
+  - Omni Route PATH entries and Homebrew command shim
   - Omnigent backups under ~/.omnigent-backups
   - ~/omnigent workspace, if present
   - this cloned omni-route repository, when its origin is verified
@@ -72,6 +74,9 @@ if command -v brew >/dev/null 2>&1; then
   brew untap omnigent-ai/tap >/dev/null 2>&1 || true
 fi
 rm -f "$HOME/.local/bin/omni" "$HOME/.local/bin/omnigent"
+
+omni_route_remove_brew_shim || true
+omni_route_remove_path || true
 
 rm -f \
   "$HOME/.local/bin/omni-rotate" \
@@ -131,4 +136,5 @@ fi
 
 echo
 echo "Full Omnigent + Omni Route cleanup complete."
+echo "Omni Route PATH entries and command shim were removed."
 echo "Kept shared tools: Homebrew, Git, uv, tmux, Node, Codex CLI, Claude CLI."

@@ -1,15 +1,12 @@
 # Omni Route / Omnigent Subscription Rotation v1.1
 
-An isolated patched Omnigent installation for macOS that rotates across your
-registered Codex subscription accounts. Claude Pro is an optional final fallback.
+Omni Route is an isolated patched Omnigent installation for macOS that rotates across registered Codex subscription accounts, with optional Claude Pro fallback.
 
-It uses official CLI subscription authentication. It does not turn ChatGPT Plus
-or Claude Pro into API keys.
+It uses official CLI subscription authentication. It does not convert ChatGPT Plus/Pro or Claude Pro into API keys.
 
 ## Full macOS install
 
-From a fresh clone, this installs the normal Omnigent CLI, the current Omnigent
-Desktop app, and Omni Route:
+From a fresh clone:
 
 ```bash
 git clone git@github.com:Sevastian-Bahynskyi/omni-route.git
@@ -17,160 +14,93 @@ cd omni-route
 ./install_all.sh
 ```
 
-The script uses Homebrew for missing shared prerequisites, Omnigent's official
-CLI installer, and Omnigent's official macOS DMG download. It then runs the
-Omni Route installer and subscription configurator.
-
-Shared tools such as Homebrew, Git, `uv`, `tmux`, Node and Codex CLI are treated
-as machine-level dependencies rather than Omnigent-owned files.
+This installs/updates the normal Omnigent CLI, Omnigent Desktop app, required shared dependencies when missing, and Omni Route.
 
 ## Omni Route only
 
-If the normal Omnigent CLI/Desktop app are already installed and you only want
-the routing extension:
+If normal Omnigent/Desktop are already installed:
 
 ```bash
 ./install.sh
 ```
 
-The installer opens a small subscription setup loop:
-
-```text
-Commands: codex, claude, done
-
-Add [codex/claude] or type done:
-```
-
-Type `codex` each time you want to register another ChatGPT/Codex subscription.
-There is no fixed two-account limit. Type `claude` if you want to enable your
-currently authenticated Claude Pro account as the final fallback. Claude is
-optional, so you can install now with only your Codex accounts.
-
-When the route looks right, type `done` (or `confirm` / `finish`).
-
-Example today:
+The account configurator accepts:
 
 ```text
 codex
-codex
-done
-```
-
-Later, after getting Claude Pro:
-
-```bash
-~/.local/bin/omni-rotate-accounts
-```
-
-Then:
-
-```text
 claude
 done
 ```
 
-## Run
+Type `codex` once per ChatGPT/Codex subscription. Type `claude` to enable the currently authenticated Claude Pro account as final fallback. Claude is optional.
+
+## One command: `omni-rotate`
+
+Installation adds `~/.local/bin` to your macOS shell PATH and installs a managed Homebrew-bin shim so `omni-rotate` is available from any directory immediately after installation.
+
+Primary commands:
 
 ```bash
-~/.local/bin/omni-rotate codex
+omni-rotate codex                 # start routed Omnigent/Codex
+omni-rotate test                  # full read-only diagnostics
+omni-rotate status                # Matrix-style localhost dashboard
+omni-rotate accounts              # add/configure subscriptions
+omni-rotate help
 ```
 
-The normal CLI remains available separately as:
+Any unrecognized subcommand is forwarded to the patched Omnigent CLI, so other Omnigent commands continue to work through `omni-rotate`.
+
+Compatibility aliases remain available:
 
 ```bash
-omni
+omni-rotate-test
+omni-rotate-status
+omni-rotate-accounts
 ```
 
-## Full read-only diagnostics
-
-Run the diagnostic script directly with:
+## Status dashboard
 
 ```bash
-~/.local/bin/omni-rotate-test
+omni-rotate status
 ```
 
-It reports explicit `[PASS]`, `[WARN]`, `[FAIL]`, and `[INFO]` lines and finishes
-with `READY`, `READY WITH WARNINGS`, or `NOT READY`.
+Opens `http://127.0.0.1:8787/`. It shows route order, current account, account email when locally available, cooldown/reset state, Claude fallback, installation health, and a Matrix-style diagnostic terminal with a **Run Full Test** button.
 
-The diagnostic checks:
-
-- required commands and patched launchers;
-- patched Omnigent executable and all rotation integration points;
-- synthetic A -> B rotation using the real pool implementation without touching
-  your real state;
-- current and legacy quota payload parsing plus `usageLimitExceeded` detection;
-- every configured Codex account auth file and file permissions;
-- every account with the official `codex login status` command under its own
-  isolated `CODEX_HOME`;
-- duplicate account identities;
-- current selected account and cooldown state;
-- Claude fallback when configured;
-- when an Omni Route Codex session is running, the live bridge account binding
-  and read-only Codex `account/read` + `account/rateLimits/read` RPCs.
-
-No model turn is sent by the diagnostic, and it does not modify route config,
-cooldowns, or subscription credentials. If no live Codex session exists, the
-live app-server check is a warning rather than a failure.
-
-## Local status dashboard
-
-Start the dashboard with:
-
-```bash
-~/.local/bin/omni-rotate-status
-```
-
-It opens `http://127.0.0.1:8787/` and refreshes every two seconds. The Matrix-style
-page shows:
-
-- configured Codex accounts and their order;
-- account email when it can be read from the local auth metadata/JWT payload;
-- current/ready/cooldown/missing-auth state;
-- cooldown reset countdowns when known;
-- current active account and rotation threshold;
-- Claude fallback configuration/auth status;
-- patched runtime, normal `omni` CLI, and Desktop app presence.
-
-The page includes **RUN FULL TEST**, which runs the same read-only diagnostic and
-renders its PASS/WARN/FAIL output in a Matrix-style terminal panel.
-
-The server binds only to `127.0.0.1`. Status and diagnostics use GET/HEAD only;
-POST/PUT/PATCH/DELETE return HTTP 405. The status API may expose your own account
-email, but never returns OAuth/JWT token contents or auth file paths.
+The server binds only to `127.0.0.1`. It does not expose OAuth/JWT token contents.
 
 Options:
 
 ```bash
-~/.local/bin/omni-rotate-status --no-open
-~/.local/bin/omni-rotate-status --port 8899
+omni-rotate status --no-open
+omni-rotate status --port 8899
 ```
+
+## Diagnostics
+
+```bash
+omni-rotate test
+```
+
+Diagnostics validate the installed runtime, account auth, distinct account identities, permissions, rotation wiring, synthetic A→B switching, current state, Claude fallback, and live Codex account/quota RPCs when a routed session is running.
 
 ## Routing behavior
 
-The Codex accounts are tried in the order they were registered. Before a fresh
-turn, the extension calls Codex app-server's `account/rateLimits/read`. At 99%
-usage, when ordinary included usage is denied, or when Codex reports a reached
-limit, Omnigent relaunches the same session on the next available Codex account.
+Codex accounts are tried in registration order. Before a fresh turn, Omni Route checks Codex app-server rate limits. At the configured threshold (default 99%), when ordinary included usage is denied, or when Codex reports a reached limit, the same Omnigent session is relaunched on the next available Codex account.
 
-If a running turn itself fails with Codex's structured `usageLimitExceeded`, the
-extension rotates and issues a continuation on the same resumed Codex thread.
+If a running turn fails with Codex `usageLimitExceeded`, Omni Route rotates and continues on the resumed thread.
 
 If every Codex subscription is exhausted:
 
-- with Claude configured: the same Omnigent session switches to
-  `claude-native-ui` and continues;
-- without Claude configured: the session reports that no subscription fallback
-  remains instead of failing installation or trying an unconfigured Claude CLI.
+- with Claude configured: the same Omnigent session switches to `claude-native-ui`;
+- without Claude configured: the session reports that no subscription fallback remains.
 
-Only `auth.json` changes between Codex accounts. Omnigent's normal private
-`CODEX_HOME` construction remains responsible for config, skills, MCP setup,
-hooks and workspace/session state.
+## Add accounts later
 
-## Current Claude limitation
+```bash
+omni-rotate accounts
+```
 
-The route currently supports one Claude Pro fallback, because Omnigent's native
-Claude harness uses the active Claude Code CLI login. Codex subscription slots
-are unlimited. Multi-Claude-account pooling would be a separate runtime feature.
+Existing profiles are preserved. Add another `codex` profile or configure `claude`, then type `done`.
 
 ## Full macOS cleanup
 
@@ -178,25 +108,20 @@ are unlimited. Multi-Claude-account pooling would be a separate runtime feature.
 ./uninstall_all.sh
 ```
 
-It requires typing `DELETE`. For non-interactive use:
+For non-interactive use:
 
 ```bash
 ./uninstall_all.sh --yes
 ```
 
-This removes the normal Omnigent CLI, Desktop app and Desktop data,
-`~/.omnigent`, Omni Route runtime/account profiles, diagnostic/status launchers,
-Omnigent backups, `~/omnigent`, and this cloned `omni-route` repository after
-verifying its Git origin.
+This removes normal Omnigent CLI/state, Desktop app/data, Omni Route runtime/account state, its PATH blocks, its Homebrew command shim, and this cloned repository when the Git origin is verified.
 
-It intentionally keeps shared developer tools and unrelated coding CLIs:
-Homebrew, Git, `uv`, `tmux`, Node, Codex CLI and Claude CLI.
+It intentionally keeps shared tools and unrelated CLIs: Homebrew, Git, `uv`, `tmux`, Node, Codex CLI, and Claude CLI.
 
-## Uninstall Omni Route only
+## Remove Omni Route only
 
 ```bash
 ./uninstall.sh
 ```
 
-This leaves the normal Omnigent installation and registered subscription login
-profiles untouched.
+This removes Omni Route, its compatibility launchers, its PATH blocks and managed command shim, while leaving normal Omnigent and subscription profiles under `~/.omnigent` untouched.

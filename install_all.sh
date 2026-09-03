@@ -28,7 +28,6 @@ ensure_formula curl curl
 ensure_formula uv uv
 ensure_formula tmux tmux
 
-# Omnigent requires Node 22+ for coding-harness CLIs.
 node_ok=false
 if command -v node >/dev/null 2>&1; then
   node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
@@ -47,13 +46,11 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-# Omni Route requires the official Codex CLI. Keep an existing install untouched.
 if ! command -v codex >/dev/null 2>&1; then
   echo "Installing the official Codex CLI..."
   npm install -g @openai/codex
 fi
 
-# Install/upgrade the normal Omnigent CLI using Omnigent's official installer.
 echo "Installing/upgrading the normal Omnigent CLI..."
 curl -fsSL https://omnigent.ai/install.sh | sh
 
@@ -73,14 +70,10 @@ install_desktop_app() {
   dmg="${tmp_dir}/omnigent.dmg"
   mount_dir="${tmp_dir}/mount"
   mkdir -p "$mount_dir"
-
-  # Expand paths into the trap now so a failed command anywhere below still
-  # detaches the image and removes the temporary directory.
   trap "hdiutil detach '$mount_dir' -quiet >/dev/null 2>&1 || true; rm -rf '$tmp_dir'" EXIT
 
   echo "Downloading the Omnigent Desktop app..."
   curl -fL --retry 3 --retry-delay 1 "$download_url" -o "$dmg"
-
   echo "Mounting Desktop app image..."
   hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir" -quiet
 
@@ -118,7 +111,6 @@ install_desktop_app() {
 
 install_desktop_app
 
-# Install the isolated Omni Route build and run its subscription configurator.
 echo "Installing Omni Route..."
 "${HERE}/install.sh"
 
@@ -127,6 +119,8 @@ echo "============================================================"
 echo "FULL OMNIGENT + OMNI ROUTE INSTALL COMPLETE"
 echo "============================================================"
 echo "Normal CLI:       omni"
-echo "Omni Route CLI:   ~/.local/bin/omni-rotate codex"
+echo "Omni Route:       omni-rotate codex"
+echo "Diagnostics:      omni-rotate test"
+echo "Status dashboard: omni-rotate status"
+echo "Accounts:         omni-rotate accounts"
 echo "Desktop app:      /Applications/Omnigent.app (or matching Omnigent app bundle)"
-echo "Add subscriptions later: ~/.local/bin/omni-rotate-accounts"
