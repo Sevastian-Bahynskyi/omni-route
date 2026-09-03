@@ -14,7 +14,7 @@ cd omni-route
 ./install_all.sh
 ```
 
-This installs/updates the normal Omnigent CLI, Omnigent Desktop app, required shared dependencies when missing, and Omni Route.
+This installs/updates the normal Omnigent CLI, Omnigent Desktop app, required shared dependencies when missing, and Omni Route. After Omni Route finishes successfully, the local dashboard is started in the background and opened automatically.
 
 ## Omni Route only
 
@@ -41,16 +41,16 @@ Installation adds `~/.local/bin` to your macOS shell PATH and installs a managed
 Primary commands:
 
 ```bash
-omni-rotate codex                 # start routed Omnigent/Codex
-omni-rotate test                  # full read-only diagnostics
-omni-rotate status                # Matrix-style localhost dashboard
+omni-rotate start                 # start the routed session: Codex pool -> optional Claude fallback
+omni-rotate test                  # full diagnostics
+omni-rotate status                # Matrix-style localhost route dashboard
 omni-rotate accounts              # add/configure subscriptions
 omni-rotate help
 ```
 
-Any unrecognized subcommand is forwarded to the patched Omnigent CLI, so other Omnigent commands continue to work through `omni-rotate`.
+`omni-rotate codex` remains a compatibility alias for `omni-rotate start`. Any other unrecognized subcommand is forwarded to the patched Omnigent CLI.
 
-Compatibility aliases remain available:
+Compatibility aliases also remain available:
 
 ```bash
 omni-rotate-test
@@ -58,15 +58,17 @@ omni-rotate-status
 omni-rotate-accounts
 ```
 
-## Status dashboard
+## Route dashboard
 
 ```bash
 omni-rotate status
 ```
 
-Opens `http://127.0.0.1:8787/`. It shows route order, current account, account email when locally available, cooldown/reset state, Claude fallback, installation health, and a Matrix-style diagnostic terminal with a **Run Full Test** button.
+Opens `http://127.0.0.1:8787/`. It shows route order, current account, account email when locally available, cooldown/reset state, Claude fallback, installation health, and a Matrix-style diagnostic terminal.
 
-The server binds only to `127.0.0.1`. It does not expose OAuth/JWT token contents.
+The Codex account nodes in **ROUTE CHAIN** are draggable. Dropping them in a new order saves that order directly to `~/.omnigent/codex-account-pool.json`. Existing bound sessions stay on their current account; the saved order controls the next unbound account selection and subsequent rotation priority. Claude remains the optional final fallback.
+
+The dashboard also includes **RUN FULL TEST**. The server binds only to `127.0.0.1` and never returns OAuth/JWT token contents.
 
 Options:
 
@@ -85,7 +87,7 @@ Diagnostics validate the installed runtime, account auth, distinct account ident
 
 ## Routing behavior
 
-Codex accounts are tried in registration order. Before a fresh turn, Omni Route checks Codex app-server rate limits. At the configured threshold (default 99%), when ordinary included usage is denied, or when Codex reports a reached limit, the same Omnigent session is relaunched on the next available Codex account.
+Codex accounts are tried in the saved route order. Before a fresh turn, Omni Route checks Codex app-server rate limits. At the configured threshold (default 99%), when ordinary included usage is denied, or when Codex reports a reached limit, the same Omnigent session is relaunched on the next available Codex account.
 
 If a running turn fails with Codex `usageLimitExceeded`, Omni Route rotates and continues on the resumed thread.
 
@@ -114,7 +116,7 @@ For non-interactive use:
 ./uninstall_all.sh --yes
 ```
 
-This removes normal Omnigent CLI/state, Desktop app/data, Omni Route runtime/account state, its PATH blocks, its Homebrew command shim, and this cloned repository when the Git origin is verified.
+This removes normal Omnigent CLI/state, Desktop app/data, Omni Route runtime/account state, dashboard process, PATH blocks, Homebrew command shim, and this cloned repository when the Git origin is verified.
 
 It intentionally keeps shared tools and unrelated CLIs: Homebrew, Git, `uv`, `tmux`, Node, Codex CLI, and Claude CLI.
 
@@ -124,4 +126,4 @@ It intentionally keeps shared tools and unrelated CLIs: Homebrew, Git, `uv`, `tm
 ./uninstall.sh
 ```
 
-This removes Omni Route, its compatibility launchers, its PATH blocks and managed command shim, while leaving normal Omnigent and subscription profiles under `~/.omnigent` untouched.
+This removes Omni Route, its running dashboard process, compatibility launchers, PATH blocks and managed command shim, while leaving normal Omnigent and subscription profiles under `~/.omnigent` untouched.
