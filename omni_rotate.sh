@@ -14,6 +14,7 @@ Usage:
   omni-rotate test                Run full diagnostics
   omni-rotate status [args...]    Open the local route dashboard
   omni-rotate accounts            Add/configure subscription accounts
+  omni-rotate sessions            Import/re-sync Codex + Claude session history
   omni-rotate help                Show this help
 
 Compatibility:
@@ -25,6 +26,7 @@ Examples:
   omni-rotate test
   omni-rotate status --no-open
   omni-rotate accounts
+  omni-rotate sessions
 TXT
 }
 
@@ -60,11 +62,16 @@ case "$command_name" in
       fi
       exit 0
     fi
-    exec python3 -S "${BASE}/status_server.py" "$@"
+    exec "${BASE}/omnigent/.venv/bin/python" -S "${BASE}/status_server_ext.py" "$@"
     ;;
   accounts|account|subscriptions|configure)
     shift
     exec python3 "${BASE}/configure_subscriptions.py" "$@"
+    ;;
+  sessions|history|import-sessions|sync-sessions)
+    shift
+    require_runtime
+    exec "${BASE}/omnigent/.venv/bin/python" "${BASE}/import_sessions.py" "$@"
     ;;
   version)
     require_runtime

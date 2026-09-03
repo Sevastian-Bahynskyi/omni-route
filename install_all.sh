@@ -60,10 +60,7 @@ install_desktop_app() {
   case "$arch" in
     arm64) download_url="https://omnigent.ai/download/mac" ;;
     x86_64) download_url="https://omnigent.ai/download/mac-x64" ;;
-    *)
-      echo "ERROR: unsupported macOS architecture: ${arch}" >&2
-      return 1
-      ;;
+    *) echo "ERROR: unsupported macOS architecture: ${arch}" >&2; return 1 ;;
   esac
 
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/omnigent-desktop.XXXXXX")"
@@ -89,20 +86,11 @@ install_desktop_app() {
   target_app="/Applications/$(basename "$app_source")"
   osascript -e 'tell application "Omnigent" to quit' >/dev/null 2>&1 || true
   sleep 1
-
   echo "Installing Desktop app to ${target_app}..."
   if [[ -e "$target_app" ]]; then
-    if [[ -w "$(dirname "$target_app")" ]]; then
-      rm -rf "$target_app"
-    else
-      sudo rm -rf "$target_app"
-    fi
+    if [[ -w "$(dirname "$target_app")" ]]; then rm -rf "$target_app"; else sudo rm -rf "$target_app"; fi
   fi
-  if [[ -w "/Applications" ]]; then
-    ditto "$app_source" "$target_app"
-  else
-    sudo ditto "$app_source" "$target_app"
-  fi
+  if [[ -w "/Applications" ]]; then ditto "$app_source" "$target_app"; else sudo ditto "$app_source" "$target_app"; fi
 
   hdiutil detach "$mount_dir" -quiet
   rm -rf "$tmp_dir"
@@ -120,7 +108,7 @@ echo "FULL OMNIGENT + OMNI ROUTE INSTALL COMPLETE"
 echo "============================================================"
 echo "Normal CLI:       omni"
 echo "Routed session:   omni-rotate start"
-echo "Diagnostics:      omni-rotate test"
-echo "Dashboard:        omni-rotate status (opened automatically)"
-echo "Accounts:         omni-rotate accounts"
+echo "Dashboard:        omni-rotate status (opened automatically after install)"
+echo "Configure route:  omni-rotate accounts"
+echo "Sync history:      omni-rotate sessions"
 echo "Desktop app:      /Applications/Omnigent.app (or matching Omnigent app bundle)"

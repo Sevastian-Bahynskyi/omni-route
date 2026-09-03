@@ -1,12 +1,11 @@
-# Omni Route / Omnigent Subscription Rotation v1.1
+# Omni Route / Omnigent Subscription Rotation
 
-Omni Route is an isolated patched Omnigent installation for macOS that rotates across registered Codex subscription accounts, with optional Claude Pro fallback.
+Omni Route is a macOS extension around Omnigent that rotates one routed coding
+session across multiple ChatGPT/Codex subscription accounts and can optionally
+fall back to Claude Pro. It uses the official Codex/Claude CLI subscription
+logins; it does not convert subscriptions into API keys.
 
-It uses official CLI subscription authentication. It does not convert ChatGPT Plus/Pro or Claude Pro into API keys.
-
-## Full macOS install
-
-From a fresh clone:
+## Full install
 
 ```bash
 git clone git@github.com:Sevastian-Bahynskyi/omni-route.git
@@ -14,116 +13,99 @@ cd omni-route
 ./install_all.sh
 ```
 
-This installs/updates the normal Omnigent CLI, Omnigent Desktop app, required shared dependencies when missing, and Omni Route. After Omni Route finishes successfully, the local dashboard is started in the background and opened automatically.
+`install_all.sh` installs/updates the normal Omnigent CLI, Omnigent Desktop app,
+required shared dependencies when missing, and Omni Route. `install.sh` can be
+used when normal Omnigent/Desktop are already present.
 
-## Omni Route only
+During account setup, enter `codex` once per Codex subscription, optionally
+`claude`, then `done`.
 
-If normal Omnigent/Desktop are already installed:
+## Commands
 
-```bash
-./install.sh
-```
-
-The account configurator accepts:
-
-```text
-codex
-claude
-done
-```
-
-Type `codex` once per ChatGPT/Codex subscription. Type `claude` to enable the currently authenticated Claude Pro account as final fallback. Claude is optional.
-
-## One command: `omni-rotate`
-
-Installation adds `~/.local/bin` to your macOS shell PATH and installs a managed Homebrew-bin shim so `omni-rotate` is available from any directory immediately after installation.
-
-Primary commands:
+Installation adds `omni-rotate` to PATH:
 
 ```bash
-omni-rotate start                 # start the routed session: Codex pool -> optional Claude fallback
-omni-rotate test                  # full diagnostics
-omni-rotate status                # Matrix-style localhost route dashboard
-omni-rotate accounts              # add/configure subscriptions
+omni-rotate start       # start the routed session
+omni-rotate test        # full diagnostics
+omni-rotate status      # open the local control dashboard
+omni-rotate accounts    # add/configure subscriptions
+omni-rotate sessions    # import/re-sync Codex + Claude local history
 omni-rotate help
 ```
 
-`omni-rotate codex` remains a compatibility alias for `omni-rotate start`. Any other unrecognized subcommand is forwarded to the patched Omnigent CLI.
+`omni-rotate codex` remains an alias for `omni-rotate start`.
 
-Compatibility aliases also remain available:
+## Control dashboard
 
-```bash
-omni-rotate-test
-omni-rotate-status
-omni-rotate-accounts
-```
+The dashboard runs on `http://127.0.0.1:8787/` and opens automatically after a
+successful `install.sh`.
 
-## Route dashboard
+It shows account emails/status, the automatic route chain, current routed
+provider, installation health and diagnostics. Codex accounts can be dragged in
+the route chain; the saved order is the actual priority used for new account
+selection and quota failover.
 
-```bash
-omni-rotate status
-```
+The **Current provider** dropdown switches the latest routed Omnigent session
+without changing route priority:
 
-Opens `http://127.0.0.1:8787/`. It shows route order, current account, account email when locally available, cooldown/reset state, Claude fallback, installation health, and a Matrix-style diagnostic terminal.
+- Codex account -> another Codex account: waits for the current turn to become
+  idle, binds the requested subscription and relaunches the same session.
+- Codex -> Claude: uses Omnigent's native agent switch after the turn is idle.
+- Claude -> Codex: binds the selected Codex subscription and switches the same
+  Omnigent session back to `codex-native-ui`.
 
-The Codex account nodes in **ROUTE CHAIN** are draggable. Dropping them in a new order saves that order directly to `~/.omnigent/codex-account-pool.json`. Existing bound sessions stay on their current account; the saved order controls the next unbound account selection and subsequent rotation priority. Claude remains the optional final fallback.
+A stopped/resumable Codex session can also have its next Codex account selected;
+the binding is used when that session resumes.
 
-The dashboard also includes **RUN FULL TEST**. The server binds only to `127.0.0.1` and never returns OAuth/JWT token contents.
+## Session history import
 
-Options:
-
-```bash
-omni-rotate status --no-open
-omni-rotate status --port 8899
-```
-
-## Diagnostics
+Every install automatically scans local Codex and Claude histories and imports
+them into Omnigent. You can rerun it at any time:
 
 ```bash
-omni-rotate test
+omni-rotate sessions
 ```
 
-Diagnostics validate the installed runtime, account auth, distinct account identities, permissions, rotation wiring, synthetic A→B switching, current state, Claude fallback, and live Codex account/quota RPCs when a routed session is running.
+The importer:
+
+- scans normal `~/.codex`, every registered Omni Route Codex account home, the
+  active Claude config home, and future Omni Route Claude account homes;
+- uses Omnigent's own Codex/Claude transcript normalizers, preserving native
+  titles, workspaces and resumable external session IDs;
+- creates/reuses first-class Omnigent projects by transcript workspace/cwd, so
+  sessions from the same repository are grouped together;
+- deduplicates shared Codex thread IDs across different account homes;
+- when shared copies differ, normalizes all copies and keeps the richest
+  transcript (most items, then newest/largest copy);
+- treats already-imported sessions as existing instead of creating duplicates.
 
 ## Routing behavior
 
-Codex accounts are tried in the saved route order. Before a fresh turn, Omni Route checks Codex app-server rate limits. At the configured threshold (default 99%), when ordinary included usage is denied, or when Codex reports a reached limit, the same Omnigent session is relaunched on the next available Codex account.
+Codex accounts are attempted in dashboard route order. Before a new turn Omni
+Route checks Codex rate limits. At the configured threshold (default 99%), or on
+a structured usage-limit error, the current account is cooled down and the same
+Omnigent session is relaunched on the next available account. If every Codex
+subscription is unavailable and Claude is configured, the same session switches
+to Claude and continues automatically.
 
-If a running turn fails with Codex `usageLimitExceeded`, Omni Route rotates and continues on the resumed thread.
+Manual dashboard provider switches do not mark an account exhausted and do not
+inject an automatic continuation prompt.
 
-If every Codex subscription is exhausted:
+## Cleanup
 
-- with Claude configured: the same Omnigent session switches to `claude-native-ui`;
-- without Claude configured: the session reports that no subscription fallback remains.
-
-## Add accounts later
-
-```bash
-omni-rotate accounts
-```
-
-Existing profiles are preserved. Add another `codex` profile or configure `claude`, then type `done`.
-
-## Full macOS cleanup
-
-```bash
-./uninstall_all.sh
-```
-
-For non-interactive use:
-
-```bash
-./uninstall_all.sh --yes
-```
-
-This removes normal Omnigent CLI/state, Desktop app/data, Omni Route runtime/account state, dashboard process, PATH blocks, Homebrew command shim, and this cloned repository when the Git origin is verified.
-
-It intentionally keeps shared tools and unrelated CLIs: Homebrew, Git, `uv`, `tmux`, Node, Codex CLI, and Claude CLI.
-
-## Remove Omni Route only
+Remove only Omni Route:
 
 ```bash
 ./uninstall.sh
 ```
 
-This removes Omni Route, its running dashboard process, compatibility launchers, PATH blocks and managed command shim, while leaving normal Omnigent and subscription profiles under `~/.omnigent` untouched.
+Full Omnigent + Desktop + Omni Route cleanup:
+
+```bash
+./uninstall_all.sh
+# or
+./uninstall_all.sh --yes
+```
+
+The full cleanup keeps unrelated shared tools such as Homebrew, Git, `uv`,
+`tmux`, Node, Codex CLI and Claude CLI.

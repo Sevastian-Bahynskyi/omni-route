@@ -81,6 +81,12 @@ echo "Installing Omnigent dependencies in an isolated uv environment..."
 
 echo "Running extension self-tests..."
 PYTHONPATH="${SRC}" "${SRC}/.venv/bin/python" "${HERE}/self_test.py"
+python3 "${HERE}/import_sessions.py" --self-test
+python3 -m py_compile \
+  "${HERE}/status_server.py" \
+  "${HERE}/status_server_ext.py" \
+  "${HERE}/switch_provider.py" \
+  "${HERE}/import_sessions.py"
 
 echo "Compiling patched modules..."
 (
@@ -101,12 +107,18 @@ echo "Compiling patched modules..."
 cp "${HERE}/configure_subscriptions.py" "${BASE}/configure_subscriptions.py"
 cp "${HERE}/diagnose.py" "${BASE}/diagnose.py"
 cp "${HERE}/status_server.py" "${BASE}/status_server.py"
+cp "${HERE}/status_server_ext.py" "${BASE}/status_server_ext.py"
 cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
+cp "${HERE}/switch_provider.py" "${BASE}/switch_provider.py"
+cp "${HERE}/import_sessions.py" "${BASE}/import_sessions.py"
 chmod 700 \
   "${BASE}/configure_subscriptions.py" \
   "${BASE}/diagnose.py" \
   "${BASE}/status_server.py" \
-  "${BASE}/dashboard.html"
+  "${BASE}/status_server_ext.py" \
+  "${BASE}/dashboard.html" \
+  "${BASE}/switch_provider.py" \
+  "${BASE}/import_sessions.py"
 
 cp "${HERE}/omni_rotate.sh" "${BIN}/omni-rotate"
 chmod 755 "${BIN}/omni-rotate"
@@ -132,6 +144,17 @@ chmod 755 \
 omni_route_add_path
 omni_route_install_brew_shim
 
+echo
+echo "Importing existing Codex and Claude sessions into Omnigent projects..."
+set +e
+"${SRC}/.venv/bin/python" "${BASE}/import_sessions.py"
+SESSION_IMPORT_RC=$?
+set -e
+if [[ $SESSION_IMPORT_RC -ne 0 ]]; then
+  echo "WARNING: session history import failed (exit ${SESSION_IMPORT_RC})." >&2
+  echo "You can retry later with: omni-rotate sessions" >&2
+fi
+
 rm -rf "${SRC}.previous"
 trap - EXIT
 
@@ -144,15 +167,17 @@ echo "  omni-rotate start"
 echo "  omni-rotate test"
 echo "  omni-rotate status"
 echo "  omni-rotate accounts"
+echo "  omni-rotate sessions"
 echo
 echo "Compatibility aliases are still installed:"
 echo "  omni-rotate codex / omni-rotate-test / omni-rotate-status / omni-rotate-accounts"
 echo
 echo "Your existing normal 'omni' installation was NOT modified."
 
-# Restart the installed dashboard so it always uses the just-installed server
-# code, then open it after the installer has completed successfully.
+# Keep the dashboard available after the installer exits. If a dashboard is
+# already serving on the default port, reuse it; otherwise start one detached.
 DASHBOARD_URL="http://127.0.0.1:8787/"
+pkill -f "${BASE}/status_server_ext.py" >/dev/null 2>&1 || true
 pkill -f "${BASE}/status_server.py" >/dev/null 2>&1 || true
 nohup "${BIN}/omni-rotate" status --no-open >"${BASE}/status-dashboard.log" 2>&1 </dev/null &
 sleep 0.7
