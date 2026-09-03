@@ -111,15 +111,20 @@ async def _monitor(
             clear_rotation_request(bridge_dir)
             continue
 
+        # Route order and optional Claude fallback are editable from the local
+        # dashboard. Reload the pool for every rotation request so a live session
+        # honors the latest saved route without needing a restart.
+        live_pool = CodexAccountPool.from_default()
+
         retry_at = request.get("retry_at")
         retry_at_int = int(retry_at) if isinstance(retry_at, (int, float)) else None
         if retry_at_int is None:
             retry_at_int = await _read_current_retry_at(
-                bridge_dir, rotate_at_percent=pool.config.rotate_at_percent
+                bridge_dir, rotate_at_percent=live_pool.config.rotate_at_percent
             )
 
         replay_required = bool(request.get("replay_required"))
-        next_account = pool.rotate_session(
+        next_account = live_pool.rotate_session(
             session_id,
             exhausted_account=current_account,
             retry_at=retry_at_int,
@@ -141,7 +146,7 @@ async def _monitor(
 
         # All configured Codex subscriptions are unavailable. Claude is an
         # OPTIONAL final fallback; a Codex-only install must remain valid.
-        fallback_name = pool.config.claude_fallback_agent
+        fallback_name = live_pool.config.claude_fallback_agent
         if fallback_name is None:
             record_runtime_fallback(
                 bridge_dir,
