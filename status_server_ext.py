@@ -12,6 +12,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import remote_access
 import status_server as base
 
 BRIDGE_ROOT = base.HOME / ".omnigent" / "codex-native"
@@ -19,6 +20,10 @@ VENV_PYTHON = base.PATCHED_BASE / "omnigent" / ".venv" / "bin" / "python"
 SWITCH_INSTALLED = base.PATCHED_BASE / "switch_provider.py"
 SWITCH_LOCAL = Path(__file__).resolve().with_name("switch_provider.py")
 _SWITCH_LOCK = threading.Lock()
+_REMOTE_LOCK = threading.Lock()
+_REMOTE_CACHE_LOCK = threading.Lock()
+_REMOTE_CACHE_AT = 0.0
+_REMOTE_CACHE: dict[str, Any] | None = None
 
 
 def _latest_runtime() -> dict[str, Any]:
@@ -35,6 +40,18 @@ def _latest_runtime() -> dict[str, Any]:
             stamp = float(runtime.get("updated_at") or 0)
         candidates.append((stamp, runtime))
     return max(candidates, key=lambda item: item[0])[1] if candidates else {}
+
+
+def _remote_status(*, force: bool = False) -> dict[str, Any]:
+    global _REMOTE_CACHE_AT, _REMOTE_CACHE
+    now = time.monotonic()
+    with _REMOTE_CACHE_LOCK:
+        if not force and _REMOTE_CACHE is not None and now - _REMOTE_CACHE_AT < 2.5:
+            return dict(_REMOTE_CACHE)
+        value = remote_access.status()
+        _REMOTE_CACHE = dict(value)
+        _REMOTE_CACHE_AT = time.monotonic()
+        return value
 
 
 _original_collect_status = base.collect_status
@@ -69,7 +86,10 @@ def collect_status() -> dict[str, Any]:
 
     claude = data.setdefault("claude", {})
     claude["current"] = provider == "claude"
-    data.setdefault("install", {})["sessionImporter"] = (base.PATCHED_BASE / "import_sessions.py").is_file()
+    install = data.setdefault("install", {})
+    install["sessionImporter"] = (base.PATCHED_BASE / "import_sessions.py").is_file()
+    install["tailscale"] = bool(_remote_status().get("installed"))
+    data["remoteAccess"] = _remote_status()
     return data
 
 
@@ -109,10 +129,24 @@ def _run_switch(provider: str) -> dict[str, Any]:
 
 
 class ControlHandler(base.StatusHandler):
-    server_version = "OmniRouteStatus/1.3"
+    server_version = "OmniRouteStatus/1.4"
+
+    def _same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = self.headers.get("Host", "")
+        return origin in {
+            f"http://{host}",
+            f"https://{host}",
+            f"http://localhost:{self.server.server_port}",
+            f"http://127.0.0.1:{self.server.server_port}",
+        }
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path in {"/api/remote-access/enable", "/api/remote-access/disable"}:
+            return self._remote_access_action(path)
         if path != "/api/provider/current":
             return super().do_POST()
         if not self._same_origin():
@@ -132,13 +166,30 @@ class ControlHandler(base.StatusHandler):
             _SWITCH_LOCK.release()
         self._send_json(payload, 200 if payload.get("ok") else 409)
 
+    def _remote_access_action(self, path: str) -> None:
+        if not self._same_origin():
+            return self._send_json({"ok": False, "error": "forbidden"}, 403)
+        if not _REMOTE_LOCK.acquire(blocking=False):
+            return self._send_json({"ok": False, "error": "remote access update already in progress"}, 409)
+        try:
+            payload = remote_access.enable() if path.endswith("/enable") else remote_access.disable()
+            remote = payload.get("remoteAccess") if isinstance(payload, dict) else None
+            if isinstance(remote, dict):
+                global _REMOTE_CACHE_AT, _REMOTE_CACHE
+                with _REMOTE_CACHE_LOCK:
+                    _REMOTE_CACHE = dict(remote)
+                    _REMOTE_CACHE_AT = time.monotonic()
+            if isinstance(payload, dict) and payload.get("ok"):
+                payload["status"] = collect_status()
+        finally:
+            _REMOTE_LOCK.release()
+        self._send_json(payload, 200 if payload.get("ok") else 409)
+
     def _send_json(self, payload: dict[str, Any], status: int) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self._headers("application/json; charset=utf-8", len(body), status)
         self.wfile.write(body)
 
-
-# Keep HEAD honest for the added endpoint (POST-only, so GET remains 404 via base handler).
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Omni Route localhost control dashboard")
