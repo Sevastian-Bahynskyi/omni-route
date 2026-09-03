@@ -6,6 +6,9 @@ Subcommands: start | test | status | accounts | sessions
 Compatibility: omni-rotate codex aliases omni-rotate start
 PATH integration: managed shell profile block + Homebrew-bin shim
 Dashboard: local Matrix-style control panel, route reorder + current provider switch
+Remote access: optional tailnet-only HTTPS via Tailscale Serve -> local 127.0.0.1:8787
+Remote controller: remote_access.py
+Tailscale install: install.sh installs tailscale-app with Homebrew when missing
 Session import: all local Codex/Claude history -> Omnigent first-class projects by workspace
 Shared session handling: dedupe same source/session id across account homes; richest copy wins
 Provider switch helper: switch_provider.py
