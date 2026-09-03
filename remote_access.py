@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import urllib.parse
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +12,9 @@ from typing import Any
 
 DASHBOARD_TARGET = "http://127.0.0.1:8787"
 TAILSCALE_HTTPS_PORT = 8443
+SERVER_HTTPS_PORT = 8444
+SERVER_TARGET = "http://127.0.0.1:6767"
+_APPROVAL_URL: str | None = None
 
 
 def tailscale_cli() -> str | None:
@@ -25,7 +30,7 @@ def tailscale_cli() -> str | None:
     return None
 
 
-def _run(*args: str, timeout: float = 4.0) -> subprocess.CompletedProcess[str] | None:
+def _run(*args: str, timeout: float = 2.0) -> subprocess.CompletedProcess[str] | None:
     cli = tailscale_cli()
     if cli is None:
         return None
@@ -39,7 +44,10 @@ def _run(*args: str, timeout: float = 4.0) -> subprocess.CompletedProcess[str] |
             timeout=timeout,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
+        return subprocess.CompletedProcess([cli, *args], 124, stdout=output)
+    except OSError:
         return None
 
 
@@ -73,116 +81,95 @@ def _connection() -> tuple[bool, str, str | None, str | None]:
     return False, state, dns_name, f"Backend state: {backend}"
 
 
-def _serve_state() -> tuple[bool, bool]:
-    """Return (our_dashboard_enabled, https_port_in_use)."""
+def _serve_state(port: int = TAILSCALE_HTTPS_PORT, target: str = DASHBOARD_TARGET) -> tuple[bool, bool]:
     result = _run("serve", "status", "--json")
-    if result is not None and result.returncode == 0:
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            payload = None
-        if isinstance(payload, dict):
-            port_in_use = False
-            web_maps: list[dict[str, Any]] = []
-            web = payload.get("Web")
-            if isinstance(web, dict):
-                web_maps.append(web)
-            services = payload.get("Services")
-            if isinstance(services, dict):
-                for service in services.values():
-                    if isinstance(service, dict) and isinstance(service.get("Web"), dict):
-                        web_maps.append(service["Web"])
-            for web_map in web_maps:
-                for host_port, config in web_map.items():
-                    if not isinstance(host_port, str) or not host_port.endswith(f":{TAILSCALE_HTTPS_PORT}"):
-                        continue
-                    port_in_use = True
-                    if DASHBOARD_TARGET in json.dumps(config, separators=(",", ":")):
-                        return True, True
-            if port_in_use:
-                return False, True
-
-    result = _run("serve", "status")
     if result is None or result.returncode != 0:
-        return False, False
-    text = result.stdout
-    port_in_use = f":{TAILSCALE_HTTPS_PORT}" in text
-    return DASHBOARD_TARGET in text and port_in_use, port_in_use
+        return False, True
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False, True
+    if not isinstance(payload, dict):
+        return False, True
+    web = payload.get("Web", {})
+    if not isinstance(web, dict):
+        return False, True
+    matches = [value for host, value in web.items() if host.endswith(f":{port}")]
+    if not matches:
+        tcp = payload.get("TCP", {})
+        return False, isinstance(tcp, dict) and str(port) in tcp
+    expected = {"/": {"Proxy": target}}
+    owned = len(matches) == 1 and isinstance(matches[0], dict) and matches[0].get("Handlers") == expected
+    return owned, True
 
 
 def status() -> dict[str, Any]:
-    cli = tailscale_cli()
-    if cli is None:
-        return {
-            "installed": False,
-            "connected": False,
-            "connectionState": "not_installed",
-            "enabled": False,
-            "url": None,
-            "detail": "Tailscale is not installed",
-        }
-    connected, state, dns_name, detail = _connection()
-    enabled, port_in_use = _serve_state()
-    conflict = port_in_use and not enabled
-    if conflict and detail is None:
-        detail = f"Tailscale HTTPS port {TAILSCALE_HTTPS_PORT} is already used by another Serve target"
-    url = f"https://{dns_name}:{TAILSCALE_HTTPS_PORT}/" if dns_name else None
+    installed = tailscale_cli() is not None
+    if installed:
+        connected, state, dns_name, detail = _connection()
+        dashboard, dashboard_used = _serve_state()
+        server, server_used = _serve_state(SERVER_HTTPS_PORT, SERVER_TARGET)
+    else:
+        connected, state, dns_name, detail = False, "not_installed", None, "Tailscale is not installed"
+        dashboard = dashboard_used = server = server_used = False
+    conflict = (dashboard_used and not dashboard) or (server_used and not server)
+    if conflict:
+        detail = "A remote port is occupied by another target, or its configuration could not be checked."
+    if _APPROVAL_URL and not (dashboard and server):
+        detail = "Approve Tailscale Serve for your network, then click Enable again."
     return {
-        "installed": True,
-        "connected": connected,
-        "connectionState": state,
-        "enabled": enabled,
+        "installed": installed, "connected": connected, "connectionState": state,
+        "enabled": dashboard and server, "dashboardEnabled": dashboard, "serverEnabled": server,
         "portConflict": conflict,
-        "url": url,
+        "url": f"https://{dns_name}:{TAILSCALE_HTTPS_PORT}/" if dns_name and dashboard and connected else None,
+        "serverUrl": f"https://{dns_name}:{SERVER_HTTPS_PORT}/" if dns_name and server and connected else None,
+        "approvalUrl": _APPROVAL_URL if not (dashboard and server) else None,
         "detail": detail,
     }
 
 
+def _approval_link(output: str) -> str | None:
+    for candidate in re.findall(r"https://[^\s]+", output):
+        url = urllib.parse.urlsplit(candidate)
+        if url.netloc == "login.tailscale.com" and url.path == "/f/serve":
+            return candidate
+    return None
+
+
 def enable() -> dict[str, Any]:
+    global _APPROVAL_URL
     before = status()
-    if not before["installed"]:
-        return {"ok": False, "error": "Tailscale is not installed", "remoteAccess": before}
     if not before["connected"]:
-        return {
-            "ok": False,
-            "error": "Tailscale is installed but not connected. Sign in/connect Tailscale first.",
-            "remoteAccess": before,
-        }
-    if before.get("portConflict"):
-        return {
-            "ok": False,
-            "error": f"Tailscale HTTPS port {TAILSCALE_HTTPS_PORT} is already used by another Serve target.",
-            "remoteAccess": before,
-        }
-    if before["enabled"]:
-        return {"ok": True, "remoteAccess": before}
-    result = _run(
-        "serve",
-        "--bg",
-        "--yes",
-        f"--https={TAILSCALE_HTTPS_PORT}",
-        DASHBOARD_TARGET,
-        timeout=25.0,
-    )
+        return {"ok": False, "error": "Connect Tailscale on this Mac first.", "remoteAccess": before}
+    if before["portConflict"]:
+        return {"ok": False, "error": before["detail"], "remoteAccess": before}
+    for port, target, key in (
+        (TAILSCALE_HTTPS_PORT, DASHBOARD_TARGET, "dashboardEnabled"),
+        (SERVER_HTTPS_PORT, SERVER_TARGET, "serverEnabled"),
+    ):
+        if before[key]:
+            continue
+        result = _run("serve", "--bg", "--yes", f"--https={port}", target, timeout=8.0)
+        _APPROVAL_URL = _approval_link(result.stdout) if result is not None else None
+        after = status()
+        if _APPROVAL_URL:
+            return {"ok": False, "error": "Tailscale requires your approval. Open the approval link below, then retry Enable.", "remoteAccess": after}
+        if not after[key]:
+            error = "Tailscale Serve timed out. Check Tailscale and retry." if result is not None and result.returncode == 124 else "Tailscale Serve could not start. Check your network's Serve and HTTPS settings."
+            return {"ok": False, "error": error, "remoteAccess": after}
+    _APPROVAL_URL = None
     after = status()
-    if result is None:
-        return {"ok": False, "error": "Unable to run Tailscale Serve", "remoteAccess": after}
-    if result.returncode != 0 or not after["enabled"]:
-        detail = result.stdout.strip()[-1500:] or "Tailscale Serve did not become active"
-        return {"ok": False, "error": detail, "remoteAccess": after}
-    return {"ok": True, "remoteAccess": after}
+    return {"ok": bool(after["enabled"]), "remoteAccess": after}
 
 
 def disable() -> dict[str, Any]:
-    before = status()
-    if not before["installed"] or not before["enabled"]:
-        return {"ok": True, "remoteAccess": before}
-    result = _run("serve", "--yes", f"--https={TAILSCALE_HTTPS_PORT}", "off", timeout=20.0)
+    for port, target in ((TAILSCALE_HTTPS_PORT, DASHBOARD_TARGET), (SERVER_HTTPS_PORT, SERVER_TARGET)):
+        owned, _ = _serve_state(port, target)
+        if owned:
+            _run("serve", "--yes", f"--https={port}", "off", timeout=8.0)
     after = status()
-    if not after["enabled"]:
-        return {"ok": True, "remoteAccess": after}
-    detail = result.stdout.strip()[-1500:] if result is not None else "Unable to run Tailscale Serve"
-    return {"ok": False, "error": detail or "Tailscale Serve is still enabled", "remoteAccess": after}
+    ok = not after["dashboardEnabled"] and not after["serverEnabled"]
+    return {"ok": ok, "remoteAccess": after, **({} if ok else {"error": "Remote access could not be disabled. Check Tailscale and retry."})}
 
 
 def main() -> int:

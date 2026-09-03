@@ -74,17 +74,23 @@ the binding is used when that session resumes.
 
 ### Optional Tailscale remote access
 
-The **Remote Access** section shows Tailscale connection state and can enable or
-disable a tailnet-only HTTPS proxy to the existing local dashboard. Enabling it
-runs Tailscale Serve on dedicated HTTPS port `8443` and shows the generated
-`https://<device>.<tailnet>.ts.net:8443/` URL with a **Copy Link** action.
+The **Remote Access** section enables two tailnet-only HTTPS proxies:
 
-The dashboard server itself continues listening only on `127.0.0.1:8787`.
-Tailscale terminates HTTPS and forwards authenticated tailnet traffic to that
-loopback service. Omni Route does not use Tailscale Funnel and does not expose
-the dashboard to the public internet. If port `8443` is already used by another
-Tailscale Serve target, Omni Route reports the conflict instead of overwriting
-that configuration.
+- **Dashboard link**, port `8443`, opens the account-control dashboard in a browser.
+- **Server link**, port `8444`, goes to Omnigent on local port `6767`. Paste this link into the Omnigent phone app's Server URL field.
+
+Connect Tailscale on the phone to the same network as the Mac. Keep the Mac
+awake, online, and running Omnigent. Access is restricted by your tailnet access
+policy; devices permitted to reach these ports can use the proxied local services.
+
+On first use, Tailscale may require approval to enable Serve and HTTPS for the
+network. The dashboard shows **Approve Tailscale Serve** instead of silently
+waiting. Complete that step, then click Enable again. Links appear only after
+the corresponding proxy is enabled. Errors remain visible across refreshes.
+
+The dashboard and Omnigent continue listening on loopback. Tailscale terminates
+HTTPS. No Funnel or public-internet exposure is enabled. Existing unrelated
+Serve routes are not overwritten.
 
 ## Session history import
 

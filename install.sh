@@ -107,6 +107,7 @@ PYTHONPATH="${SRC}" "${SRC}/.venv/bin/python" "${HERE}/self_test.py"
 PYTHONPATH="${SRC}" "${SRC}/.venv/bin/python" "${HERE}/test_routing.py"
 python3 "${HERE}/test_setup.py"
 python3 "${HERE}/test_dashboard.py"
+python3 "${HERE}/test_remote_access.py"
 python3 "${HERE}/import_sessions.py" --self-test
 python3 -m py_compile \
   "${HERE}/status_server.py" \

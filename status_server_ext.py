@@ -180,8 +180,6 @@ class ControlHandler(base.StatusHandler):
                 with _REMOTE_CACHE_LOCK:
                     _REMOTE_CACHE = dict(remote)
                     _REMOTE_CACHE_AT = time.monotonic()
-            if isinstance(payload, dict) and payload.get("ok"):
-                payload["status"] = collect_status()
         finally:
             _REMOTE_LOCK.release()
         self._send_json(payload, 200 if payload.get("ok") else 409)
