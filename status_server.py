@@ -136,13 +136,8 @@ def update_route_order(names: list[str]) -> dict[str, Any]:
 
     config["accounts"] = [configured[name] for name in names]
     _atomic_write_json(CONFIG_PATH, config)
-
-    # Existing bound sessions keep their account. Clearing the global preference
-    # makes the new configured order control the next unbound selection/rotation.
-    state = _read_json(STATE_PATH)
-    if state:
-        state.pop("current_account", None)
-        _atomic_write_json(STATE_PATH, state)
+    # Runtime selection reads this ordered list directly. Existing bound sessions
+    # stay on their current account until they rotate.
     return collect_status()
 
 
