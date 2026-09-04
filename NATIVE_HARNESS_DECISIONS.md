@@ -263,7 +263,83 @@ no rotation is armed.
 This confirms §4 (preparation-threshold wrap-up and turn-boundary rotation) and
 §5 (outgoing agent writes the handoff) are implementable as specified.
 
-### Gates 5-6 — not yet run
+### Gate 5 — automation registration: **PASS on mechanism, write-path not yet verified**
 
-5. Self-gating automation fires and starts a turn after relaunch.
-6. Full unattended loop.
+A scheduled task created through the Claude Desktop UI stores its two halves in
+two places:
+
+1. **The prompt**, on disk and plainly writable, at
+   `~/.claude/scheduled-tasks/<id>/SKILL.md` — YAML frontmatter carrying `name`
+   and `description`, with the prompt as the body.
+2. **The metadata**, as plain JSON (not leveldb) at
+   `<user-data-dir>/claude-code-sessions/<accountUuid>/<uuid>/scheduled-tasks.json`.
+
+The observed record for a Manual task:
+
+```json
+{"id":"omni-route-probe","displayName":"omni-route-probe","enabled":true,
+ "filePath":"/Users/seva/.claude/scheduled-tasks/omni-route-probe/SKILL.md",
+ "createdAt":1788533213585,"cwd":"/Users/seva/Developer/personal/omni-route",
+ "useWorktree":false}
+```
+
+The full field set, recovered from the application bundle:
+
+```
+id, displayName, cronExpression, fireAt, enabled, filePath, createdAt, model,
+userSelectedFolders, userSelectedFiles, userSelectedProjectUuids, spaceId, cwd,
+useWorktree, sourceBranch, permissionMode, chromePermissionMode, disableJitter,
+notifySessionId, dispatchSubscribed, migratedFromRemote
+```
+
+Scheduling semantics, from the same source: a task is recurring when it has a
+`cronExpression`, and one-shot when it has a `fireAt`. Setting either enables the
+task; clearing both disables it. "Manual" is simply a task with neither, which
+is why the probe task has `enabled: true` and no schedule field and will never
+fire on its own.
+
+**Consequence — the automation is programmatically registrable.** Omni Route can
+create the self-gating rotation automation by writing `SKILL.md` and appending
+one record to `scheduled-tasks.json`. No per-account UI setup is needed beyond
+the one-time sign-in, and because `cwd` is per-task, Omni Route can create one
+automation per workspace on demand rather than asking the user to do it for every
+project.
+
+Settings the rotation automation must use:
+
+- `cronExpression: "*/5 * * * *"` — the ~5 minute self-gating tick.
+- `useWorktree: false` — **required**. A worktree would put the continuation in a
+  new tree, away from the branch the outgoing agent committed to.
+- `disableJitter: true` — the app otherwise staggers runs by a few minutes, which
+  is latency added to every rotation.
+- `permissionMode` set for unattended work; the UI's default is "Don't ask".
+
+**Still unverified:** that a task written this way is picked up by the app. The
+schema is known and the file is plain JSON, but writing it has not yet been
+tested. It must only be written while the app is stopped, which the rotation
+sequence already guarantees.
+
+**Risk to carry:** `scheduled-tasks.json` is an undocumented internal format.
+The writer must validate the file's shape before touching it, back it up, and
+degrade to a visible `needs user action` ("create the automation manually")
+rather than corrupting the file if the schema stops matching.
+
+### Gate 6 — not yet run
+
+Full unattended loop: Codex A -> Codex B, Claude A -> Claude B.
+
+### Sign-in findings (from a remote-controlled run)
+
+- Claude Desktop demanded a **web sign-in even though `claude-1` and `claude-3`
+  are already authenticated as CLI profiles**. Independent confirmation of the
+  gate 2 conclusion: the Desktop account is a browser session, unrelated to
+  `CLAUDE_CONFIG_DIR`.
+- The app partitions its per-account state by **account UUID**, so the
+  `claude-code-sessions/<accountUuid>/` path gives Omni Route a reliable way to
+  find the right task store per account.
+- Profile-to-account mapping: `claude-1` = `couplegoai.main@…`,
+  `claude-3` = `support@couplegoai.com`, `claude-2` = not signed in and not in
+  the pool. ChatGPT.app is signed in as `support@couplegoai.com` (Plus).
+- ChatGPT.app **blocks UI self-automation**, so any plan that depends on driving
+  its interface is unsafe. This reinforces the decision not to use UI automation
+  for rotation.
