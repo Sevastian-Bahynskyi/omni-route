@@ -70,11 +70,17 @@ class ClaudeIntegrationTests(unittest.TestCase):
             env, unset = self.integration.prepare_account_environment(profile, {
                 "ANTHROPIC_PROFILE": "wrong", "ANTHROPIC_API_KEY": "wrong",
                 "CLAUDE_CODE_OAUTH_TOKEN": "wrong", "ENABLE_TOOL_SEARCH": "true",
-            })
+            }, workspace=root / "project")
             self.assertEqual(env, {"CLAUDE_CONFIG_DIR": str(root / "account"), "ENABLE_TOOL_SEARCH": "true"})
             self.assertIn("ANTHROPIC_PROFILE", unset)
             self.assertNotIn("CLAUDE_CONFIG_DIR", unset)
             self.assertEqual((root / "account/projects").resolve(), (root / ".claude/projects").resolve())
+            account_config = json.loads((root / "account/.claude.json").read_text())
+            self.assertTrue(account_config["hasCompletedOnboarding"])
+            self.assertTrue(
+                account_config["projects"][str((root / "project").resolve())]["hasTrustDialogAccepted"]
+            )
+            self.assertEqual((root / "account/.claude.json").stat().st_mode & 0o777, 0o600)
             (root / ".claude/projects/session.jsonl").write_text("history")
             self.integration.prepare_account_environment(profile, {})
             self.assertEqual((root / "account/projects/session.jsonl").read_text(), "history")

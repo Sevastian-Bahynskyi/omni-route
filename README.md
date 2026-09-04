@@ -32,6 +32,9 @@ fallback configuration migrates to a regular `claude-legacy` profile.
 Codex uses isolated `CODEX_HOME` credentials. Claude uses isolated
 `CLAUDE_CONFIG_DIR` profiles, including distinct macOS Keychain entries as
 documented in [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+When a Claude session starts, Omni Route records workspace trust inside the
+selected account profile so Claude Code cannot strand the session on its
+interactive trust prompt.
 Use a current Claude Code release. Normal CLI logins remain unchanged.
 
 ## Commands

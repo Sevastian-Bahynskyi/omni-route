@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import filecmp
+import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -17,7 +19,9 @@ _AUTH_ENV = (
 
 
 def prepare_account_environment(
-    profile: AccountProfile, launch_env: dict[str, str],
+    profile: AccountProfile,
+    launch_env: dict[str, str],
+    workspace: Path | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     if profile.provider != "claude" or profile.config_dir is None:
         raise RuntimeError("Selected subscription account requires a different provider.")
@@ -26,6 +30,8 @@ def prepare_account_environment(
     if not profile.use_default_config:
         config_dir = profile.config_dir
         config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if workspace is not None:
+            trust_account_workspace(config_dir, workspace)
         projects = Path.home() / ".claude" / "projects"
         projects.mkdir(parents=True, exist_ok=True, mode=0o700)
         account_projects = config_dir / "projects"
@@ -46,6 +52,31 @@ def prepare_account_environment(
         env["CLAUDE_CONFIG_DIR"] = str(config_dir)
         unset.remove("CLAUDE_CONFIG_DIR")
     return env, unset
+
+
+def trust_account_workspace(config_dir: Path, workspace: Path) -> None:
+    config_path = config_dir / ".claude.json"
+    if config_path.exists():
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"{config_path} is not a JSON object; refusing to overwrite.")
+    else:
+        data = {}
+    projects = data.setdefault("projects", {})
+    if not isinstance(projects, dict):
+        raise ValueError(f"{config_path} projects is not a JSON object; refusing to overwrite.")
+    project_key = str(workspace.resolve())
+    project = projects.setdefault(project_key, {})
+    if not isinstance(project, dict):
+        raise ValueError(f"{config_path} project entry is not a JSON object; refusing to overwrite.")
+    if data.get("hasCompletedOnboarding") is True and project.get("hasTrustDialogAccepted") is True:
+        return
+    data["hasCompletedOnboarding"] = True
+    project["hasTrustDialogAccepted"] = True
+    temporary = config_path.with_name(f".{config_path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(config_path)
 
 
 def _merge_history(source: Path, destination: Path) -> None:

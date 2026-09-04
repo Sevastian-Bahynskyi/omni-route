@@ -120,7 +120,9 @@ def patch_claude_orchestration(path: Path) -> None:
     anchor = '    claude_terminal_env_unset = _claude_terminal_env_unset(claude_config)\n'
     insert = anchor + """    _account_env = build_native_claude_terminal_env(claude_config)
     if _account_profile is not None:
-        _account_env, _account_unset = prepare_account_environment(_account_profile, _account_env)
+        _account_env, _account_unset = prepare_account_environment(
+            _account_profile, _account_env, Path(workspace)
+        )
         claude_terminal_env_unset = list(set(claude_terminal_env_unset + _account_unset))
 """
     text = replace_once(text, anchor, insert, "select pooled Claude account")
