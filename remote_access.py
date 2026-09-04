@@ -130,7 +130,11 @@ def status() -> dict[str, Any]:
     }
 
 
-def sync_trusted_origin(remote_status: dict[str, Any] | None = None) -> str | None:
+def sync_trusted_origin(
+    remote_status: dict[str, Any] | None = None,
+    *,
+    clear: bool = False,
+) -> str | None:
     state = remote_status or status()
     server_url = state.get("serverUrl")
     origin: str | None = None
@@ -143,6 +147,13 @@ def sync_trusted_origin(remote_status: dict[str, Any] | None = None) -> str | No
             and parsed.port == SERVER_HTTPS_PORT
         ):
             origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin is None and not clear:
+        try:
+            existing = json.loads(TRUSTED_ORIGINS_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        origins = existing.get("origins", []) if isinstance(existing, dict) else []
+        return origins[0] if isinstance(origins, list) and origins and isinstance(origins[0], str) else None
     TRUSTED_ORIGINS_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = TRUSTED_ORIGINS_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps({"origins": [origin] if origin else []}), encoding="utf-8")
@@ -192,7 +203,7 @@ def disable() -> dict[str, Any]:
         if owned:
             _run("serve", "--yes", f"--https={port}", "off", timeout=8.0)
     after = status()
-    sync_trusted_origin(after)
+    sync_trusted_origin(after, clear=True)
     ok = not after["dashboardEnabled"] and not after["serverEnabled"]
     return {"ok": ok, "remoteAccess": after, **({} if ok else {"error": "Remote access could not be disabled. Check Tailscale and retry."})}
 

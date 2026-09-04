@@ -13,6 +13,15 @@ import remote_access as remote
 class RemoteAccessTests(unittest.TestCase):
     def setUp(self) -> None:
         remote._APPROVAL_URL = None
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        origin_patch = patch.object(
+            remote,
+            'TRUSTED_ORIGINS_PATH',
+            Path(self.directory.name) / 'origins.json',
+        )
+        origin_patch.start()
+        self.addCleanup(origin_patch.stop)
 
     def test_timeout_preserves_approval_output(self) -> None:
         message = b'https://login.tailscale.com/f/serve?node=test'
@@ -56,20 +65,19 @@ class RemoteAccessTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_trusted_origin_is_exact_and_removed_when_remote_access_is_disabled(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            remote, 'TRUSTED_ORIGINS_PATH', Path(directory) / 'origins.json'
-        ):
-            origin = remote.sync_trusted_origin({
-                'serverUrl': 'https://device.example.ts.net:8444/'
-            })
-            self.assertEqual(origin, 'https://device.example.ts.net:8444')
-            saved = json.loads(remote.TRUSTED_ORIGINS_PATH.read_text())
-            self.assertEqual(saved, {'origins': [origin]})
-            self.assertEqual(remote.TRUSTED_ORIGINS_PATH.stat().st_mode & 0o777, 0o600)
-            self.assertIsNone(remote.sync_trusted_origin({'serverUrl': None}))
-            self.assertEqual(
-                json.loads(remote.TRUSTED_ORIGINS_PATH.read_text()), {'origins': []}
-            )
+        origin = remote.sync_trusted_origin({
+            'serverUrl': 'https://device.example.ts.net:8444/'
+        })
+        self.assertEqual(origin, 'https://device.example.ts.net:8444')
+        saved = json.loads(remote.TRUSTED_ORIGINS_PATH.read_text())
+        self.assertEqual(saved, {'origins': [origin]})
+        self.assertEqual(remote.TRUSTED_ORIGINS_PATH.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(remote.sync_trusted_origin({'serverUrl': None}), origin)
+        self.assertEqual(saved, json.loads(remote.TRUSTED_ORIGINS_PATH.read_text()))
+        self.assertIsNone(remote.sync_trusted_origin({'serverUrl': None}, clear=True))
+        self.assertEqual(
+            json.loads(remote.TRUSTED_ORIGINS_PATH.read_text()), {'origins': []}
+        )
 
 
 if __name__=='__main__':
