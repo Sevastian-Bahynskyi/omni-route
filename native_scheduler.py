@@ -80,6 +80,50 @@ Do not restate the task back to the user or ask them to repeat anything. They
 should not have to notice that the account changed."""
 
 
+def trust_workspace(workspace: Path, *, claude_config_dir: Path | None = None) -> bool:
+    """Record workspace trust inside an account profile.
+
+    A scheduled task whose folder is untrusted does not fail loudly: the app
+    dispatches the session, blocks on `LocalSessions.checkTrust`, and the
+    dispatch later expires and is reported as "Skipped". Since Omni Route
+    creates both the workspace and the task without a human present, trust must
+    be recorded up front or every rotation stalls this way.
+
+    Returns True when the entry had to be added.
+    """
+    config_path = config_dir(claude_config_dir) / ".claude.json"
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SchedulerError(f"{config_path} is not valid JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise SchedulerError(f"{config_path} is not a JSON object")
+    else:
+        config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data = {}
+
+    projects = data.setdefault("projects", {})
+    if not isinstance(projects, dict):
+        raise SchedulerError(f"{config_path} projects is not a JSON object")
+    key = str(Path(workspace).resolve())
+    project = projects.setdefault(key, {})
+    if not isinstance(project, dict):
+        raise SchedulerError(f"{config_path} project entry is not a JSON object")
+
+    if data.get("hasCompletedOnboarding") is True and project.get(
+        "hasTrustDialogAccepted"
+    ) is True:
+        return False
+
+    data["hasCompletedOnboarding"] = True
+    project["hasTrustDialogAccepted"] = True
+    temporary = config_path.with_name(f".{config_path.name}.omni-route-tmp")
+    temporary.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(config_path)
+    return True
+
+
 def config_dir(explicit: Path | None = None) -> Path:
     return Path(explicit) if explicit else Path.home() / ".claude"
 
@@ -189,6 +233,9 @@ def install(
 ) -> dict[str, Any]:
     """Install or update the rotation automation. Returns a result summary."""
     task_id = task_id or task_id_for(workspace)
+    if not dry_run:
+        # Untrusted folders make scheduled sessions stall and report "Skipped".
+        trust_workspace(workspace, claude_config_dir=claude_config_dir)
     store = find_store(Path(user_data_dir), account_uuid)
     data = load_store(store)
     skill_file = write_skill(
