@@ -32,7 +32,9 @@ APP_BIN = "/Applications/Claude.app/Contents/MacOS/Claude"
 
 
 def _app_running() -> bool:
-    result = subprocess.run(["pgrep", "-f", f"--user-data-dir={UDD}"],
+    # No leading "--" in the pattern: pgrep would parse it as an option
+    # terminator and never match.
+    result = subprocess.run(["pgrep", "-f", f"user-data-dir={UDD}"],
                             capture_output=True, text=True)
     return result.returncode == 0
 
