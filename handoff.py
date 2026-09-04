@@ -22,6 +22,7 @@ from typing import Any
 
 DIRNAME = ".omni-route"
 PENDING = "handoff-pending"
+INFLIGHT = "handoff-inflight"
 LATEST = "handoff-latest.md"
 
 # The seven fields required by NATIVE_HARNESS_DIRECTION.md, plus worktree_path
@@ -191,6 +192,33 @@ def arm(workspace: Path, handoff: Handoff | None = None) -> Path:
 
 def is_pending(workspace: Path) -> bool:
     return (directory(workspace) / PENDING).exists()
+
+
+def is_inflight(workspace: Path) -> bool:
+    """A run has claimed the handoff but has not finished it."""
+    return (directory(workspace) / INFLIGHT).exists()
+
+
+def inflight_age(workspace: Path) -> float | None:
+    """Seconds since a run claimed the handoff, or None if none is in flight."""
+    marker = directory(workspace) / INFLIGHT
+    if not marker.exists():
+        return None
+    return time.time() - marker.stat().st_mtime
+
+
+def recover_stalled(workspace: Path, *, older_than: float = 1800) -> bool:
+    """Return an abandoned in-flight handoff to pending.
+
+    A run that claims the handoff and then dies would otherwise strand the task
+    forever, because the marker it consumed is the only thing that makes the
+    automation act.
+    """
+    age = inflight_age(workspace)
+    if age is None or age < older_than:
+        return False
+    (directory(workspace) / INFLIGHT).replace(directory(workspace) / PENDING)
+    return True
 
 
 def consume(workspace: Path) -> Handoff | None:

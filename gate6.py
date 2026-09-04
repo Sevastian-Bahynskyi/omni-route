@@ -122,13 +122,15 @@ def arm() -> int:
 def check() -> int:
     proof = WORKSPACE / PROOF
     pending = handoff.is_pending(WORKSPACE)
+    inflight = handoff.is_inflight(WORKSPACE)
     print(f"proof file present : {proof.exists()}")
     print(f"handoff still armed: {pending}")
+    print(f"handoff in flight  : {inflight}")
 
     if proof.exists():
         contents = proof.read_text(encoding="utf-8").strip()
         print(f"proof contents     : {contents!r}")
-        if contents == TOKEN and not pending:
+        if contents == TOKEN and not pending and not inflight:
             print("\nGATE 6 PASS — the automation resumed the task unattended,")
             print("did the work, and cleared the marker.")
             return 0
@@ -139,6 +141,11 @@ def check() -> int:
         print("\nFAIL — the proof file has unexpected contents.")
         return 1
 
+    if inflight:
+        print("\nA run claimed the handoff and has not finished it yet.")
+    elif not pending:
+        print("\nWARNING: no handoff is armed and no proof exists. The marker was")
+        print("consumed without the work being done - run `arm` again.")
     print("\nNot yet. Either it has not fired, or it did not run.")
     print("Check the Claude window: a session should appear under 'Scheduled'.")
     print("If nothing appears after ~7 minutes, run:")

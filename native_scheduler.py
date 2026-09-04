@@ -61,20 +61,33 @@ def rotation_prompt(workspace: Path) -> str:
     # agent must look for the marker where the supervisor writes it.
     root = Path(workspace).resolve()
     marker = root / ".omni-route" / "handoff-pending"
+    inflight = root / ".omni-route" / "handoff-inflight"
     latest = root / ".omni-route" / "handoff-latest.md"
-    return f"""First, check whether `{marker}` exists.
+    return f"""First, check which of these two files exists:
 
-If it does NOT exist, stop immediately and reply with exactly: no pending handoff.
+* `{marker}`
+* `{inflight}`
+
+If NEITHER exists, stop immediately and reply with exactly: no pending handoff.
 Do not investigate, do not read other files, do not start any work.
 
-If it DOES exist, an account rotation just happened and you are continuing work
-that another agent started:
+If `{inflight}` exists, another run is already working on this handoff. Stop
+immediately and reply with exactly: handoff already in progress.
 
-1. Read `{latest}`.
-2. Verify the repository state yourself with `git status` and `git log`. The
+If `{marker}` exists, an account rotation just happened and you are continuing
+work another agent started. Do these steps in this exact order:
+
+1. FIRST rename the marker so no other run picks up the same handoff:
+     mv '{marker}' '{inflight}'
+2. Read `{latest}`.
+3. Verify the repository state yourself with `git status` and `git log`. The
    repository is the source of truth; the handoff is only a pointer.
-3. Delete `{marker}` so this task does not pick the same handoff up again.
-4. Carry out the "Exact next action" from the handoff, and keep going.
+4. Carry out the "Exact next action" from the handoff, and keep going until it
+   is genuinely done.
+5. ONLY when the work is complete, delete `{inflight}`.
+
+Step 5 must be last. If you delete the marker before finishing and this session
+is interrupted, the handoff is lost and the work is abandoned silently.
 
 Do not restate the task back to the user or ask them to repeat anything. They
 should not have to notice that the account changed."""
