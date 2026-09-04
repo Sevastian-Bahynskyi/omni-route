@@ -365,9 +365,54 @@ against the two real profiles:
 The prompt embeds the **resolved** workspace path, so the marker path the agent
 checks is exactly the one the supervisor writes.
 
-### Gate 6 — not yet run
+### Gate 6 (resume half) — **PASS**
 
-Full unattended loop: Codex A -> Codex B, Claude A -> Claude B.
+A handoff was armed in a scratch workspace at 18:37 and the automation picked it
+up unattended on the next tick, did the work, and released the marker:
+
+```
+18:40:04 Spawning new session for scheduled task omni-route-rotation-b89b7ffc
+18:40:04 Dispatch acknowledged by renderer
+18:40:04 LocalSessions.checkTrust: cwd=/Users/seva/omni-route-gate6-workspace
+18:40:04 Confirmed task run for: omni-route-rotation-b89b7ffc
+```
+
+`Confirmed task run for:` is the app's success signal. The supervisor should
+treat *that* line, or the observable effect of the run, as proof — not the fact
+that a task was dispatched.
+
+Three failure modes had to be cleared first, and **all three present in the UI as
+the single word "Skipped"**, with no error anywhere:
+
+1. **Untrusted workspace.** The session spawns, blocks on
+   `LocalSessions.checkTrust`, and the dispatch later expires. One untrusted
+   folder wedges the whole schedule for that account. Fixed by recording trust in
+   the account profile before registering any task.
+2. **Silently downgraded permissions.** `bypassPermissions` is opt-in per account
+   (`bypassPermissionsOptInByAccount`, `bypassPermissionsModeEnabled` defaults to
+   false). A task requesting it on an account that has not opted in is downgraded
+   to `default`, and the session then stalls on its first tool call. Confirmed by
+   A/B: sessions at 18:27 and 18:30 recorded `permissionMode: default` and
+   stalled; sessions from 18:34 onward recorded `acceptEdits` and completed.
+   Fixed by writing allow rules into the profile's `settings.json` and requesting
+   `acceptEdits`, which is not gated.
+3. **Handoff destroyed by a stalled run.** The prompt told the agent to delete
+   the pending marker before doing the work, so a run that stalled afterwards
+   left the task abandoned with no way to retry. Fixed by claiming instead of
+   consuming: rename to `handoff-inflight` first, delete only when finished. This
+   also stops a 5-minute tick starting the same handoff twice while work is still
+   running, and `handoff.recover_stalled` returns an abandoned in-flight handoff
+   to pending.
+
+**Design consequence.** A dispatched task is not a completed task, and the UI
+label cannot distinguish "ran" from "stalled" from "never started". Rotation must
+verify the *effect* of a resume — the handoff marker released, the work visible
+in git — and must never report success because a schedule fired.
+
+### Gate 6 (switch half) — not yet run
+
+Quota detection -> wrap-up -> account swap -> resume, as one unattended loop.
+Needs the supervisor.
 
 ### Sign-in findings (from a remote-controlled run)
 
