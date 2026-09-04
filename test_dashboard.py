@@ -42,6 +42,7 @@ class DashboardTests(unittest.TestCase):
             status = dashboard.collect_status()
         self.assertEqual(status["router"]["providerCounts"], {"codex": 1, "claude": 2})
         self.assertEqual(status["router"]["currentProvider"], "claude-2")
+        self.assertEqual(status["router"]["nextAccount"], "codex-1")
         self.assertEqual([account["status"] for account in status["accounts"]], ["ready", "cooldown", "active"])
         self.assertEqual(status["accounts"][2]["sessions"], 1)
 

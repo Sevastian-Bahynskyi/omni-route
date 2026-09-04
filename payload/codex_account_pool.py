@@ -181,6 +181,7 @@ class CodexAccountPool:
         retry_at: int | None,
         reason: str,
         provider: str | None = None,
+        fallback_to_other_providers: bool = False,
     ) -> AccountProfile | None:
         if not self.enabled:
             return None
@@ -203,6 +204,12 @@ class CodexAccountPool:
                 exclude={exhausted_account} if exhausted_account else set(),
                 provider=selected_provider,
             )
+            if account is None and fallback_to_other_providers:
+                account = self._choose(
+                    state,
+                    now,
+                    exclude={exhausted_account} if exhausted_account else set(),
+                )
             bindings = state.setdefault("session_bindings", {})
             if account is None:
                 bindings.pop(session_id, None)

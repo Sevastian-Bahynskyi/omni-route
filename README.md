@@ -117,17 +117,15 @@ The importer:
 
 ## Routing behavior
 
-New sessions use the first available account in dashboard route order. Automatic
-quota rotation stays with the session's current provider: Codex rotates through
-Codex accounts and Claude rotates through Claude accounts. A provider change only
-happens when the user selects an account from the other provider in the dashboard.
-That explicit switch keeps the same Omnigent session and workspace, then sends a
-continuation handoff through the new native harness. When all accounts for the
-active provider are unavailable the router reports exhaustion until one recovers
-or the user explicitly switches providers.
+New sessions use the first available account for the provider selected in
+OmniAgent. Automatic quota rotation first tries every available account for the
+session's current provider. If none remain, it changes to the next available
+provider account, keeps the same Omnigent session and workspace, and sends a
+continuation handoff through the new native harness. The router reports exhaustion
+only when every configured subscription is unavailable.
 
-Manual dashboard provider switches do not mark an account exhausted and do not
-inject an automatic continuation prompt.
+Manual dashboard provider switches do not mark an account exhausted. A manual
+cross-provider switch sends the same continuation handoff as automatic fallback.
 
 ## Cleanup
 

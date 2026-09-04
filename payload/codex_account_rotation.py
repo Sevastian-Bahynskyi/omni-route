@@ -172,6 +172,7 @@ async def _monitor(
                 session_id, exhausted_account=current_account, retry_at=retry_at_int,
                 reason="subscription quota reached",
                 provider=active_provider if active_provider in {"codex", "claude"} else None,
+                fallback_to_other_providers=True,
             )
         clear_rotation_request(bridge_dir)
         if next_account is None:
@@ -179,7 +180,7 @@ async def _monitor(
                                    provider="exhausted", phase="exhausted")
             exhausted = read_runtime(bridge_dir) or {}
             exhausted["active_provider"] = active_provider
-            exhausted["detail"] = "All subscriptions for the active provider are cooling down or need sign-in."
+            exhausted["detail"] = "All configured subscriptions are cooling down or need sign-in."
             from omnigent.codex_account_pool import RUNTIME_FILE
             _atomic_json(bridge_dir / RUNTIME_FILE, exhausted)
             continue

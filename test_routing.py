@@ -69,6 +69,38 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(snapshot['codex-session'], self.d.name)
         self.assertEqual(snapshot['claude-session'], self.b.name)
 
+    def test_automatic_rotation_changes_provider_after_same_provider_is_exhausted(self) -> None:
+        bridge = self.root / 'automatic-cross-provider'
+        accounts.record_runtime_account(
+            bridge, session_id='s', account_name=self.a.name, provider='codex'
+        )
+        accounts.request_rotation(
+            bridge,
+            session_id='s',
+            account_name=self.a.name,
+            retry_at=2000,
+            reason='quota',
+            replay_required=True,
+        )
+        with self.pool._locked_state() as state:
+            state['cooldowns'] = {
+                self.d.name: {'retry_at': 2000, 'reason': 'quota', 'marked_at': 1000}
+            }
+        with patch.object(
+            accounts.CodexAccountPool, 'from_default', return_value=self.pool
+        ), patch.object(rotation, 'switch_to_account', new_callable=AsyncMock) as switch:
+            asyncio.run(
+                rotation._monitor(
+                    session_id='s',
+                    bridge_dir=bridge,
+                    pool=self.pool,
+                    server_client=None,
+                    relaunch=AsyncMock(),
+                )
+            )
+        self.assertEqual(switch.await_args.kwargs['profile'], self.b)
+        self.assertTrue(switch.await_args.kwargs['continue_after_switch'])
+
     def test_claude_to_claude_manual_does_not_cool_or_continue(self) -> None:
         async def scenario() -> None:
             bridge = self.root / 'manual'

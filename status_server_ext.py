@@ -207,15 +207,16 @@ def collect_status() -> dict[str, Any]:
     current_kind = next((account.get("provider") for account in route if account.get("name") == provider), None)
     next_account = None
     if route:
-        for offset in range(1, len(route) + 1):
-            candidate = route[(current_index + offset) % len(route)]
-            if (
-                candidate.get("status") in {"ready", "active"}
-                and candidate.get("name") != provider
-                and candidate.get("provider") == current_kind
-            ):
-                next_account = candidate.get("name")
-                break
+        available = [
+            route[(current_index + offset) % len(route)]
+            for offset in range(1, len(route) + 1)
+            if route[(current_index + offset) % len(route)].get("status") in {"ready", "active"}
+            and route[(current_index + offset) % len(route)].get("name") != provider
+        ]
+        same_provider = [candidate for candidate in available if candidate.get("provider") == current_kind]
+        candidates = same_provider or available
+        if candidates:
+            next_account = candidates[0].get("name")
     router["nextAccount"] = next_account
 
     install = data.setdefault("install", {})
