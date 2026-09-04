@@ -157,6 +157,10 @@ chmod 700 \
   "${BASE}/switch_provider.py" \
   "${BASE}/import_sessions.py"
 
+# Keep the local server's CSRF/WS origin allowlist synchronized with the
+# exact tailnet-only HTTPS endpoint managed by Omni Route.
+"${SRC}/.venv/bin/python" "${BASE}/remote_access.py" sync-origin >/dev/null
+
 cp "${HERE}/omni_rotate.sh" "${BIN}/omni-rotate"
 chmod 755 "${BIN}/omni-rotate"
 
@@ -194,6 +198,11 @@ fi
 
 rm -rf "${SRC}.previous"
 trap - EXIT
+
+# The runtime was replaced on disk, so restart its background daemon to avoid
+# a stale zygote importing the previous build.
+"${SRC}/.venv/bin/omni" stop >/dev/null 2>&1 || true
+"${SRC}/.venv/bin/omni" start >/dev/null
 
 echo
 echo "============================================================"

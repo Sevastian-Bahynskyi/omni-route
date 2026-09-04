@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -51,6 +54,22 @@ class RemoteAccessTests(unittest.TestCase):
         with patch.object(remote,'status',return_value={'connected':True,'portConflict':True,'detail':'conflict'}), patch.object(remote,'_run') as run:
             self.assertFalse(remote.enable()['ok'])
             run.assert_not_called()
+
+    def test_trusted_origin_is_exact_and_removed_when_remote_access_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            remote, 'TRUSTED_ORIGINS_PATH', Path(directory) / 'origins.json'
+        ):
+            origin = remote.sync_trusted_origin({
+                'serverUrl': 'https://device.example.ts.net:8444/'
+            })
+            self.assertEqual(origin, 'https://device.example.ts.net:8444')
+            saved = json.loads(remote.TRUSTED_ORIGINS_PATH.read_text())
+            self.assertEqual(saved, {'origins': [origin]})
+            self.assertEqual(remote.TRUSTED_ORIGINS_PATH.stat().st_mode & 0o777, 0o600)
+            self.assertIsNone(remote.sync_trusted_origin({'serverUrl': None}))
+            self.assertEqual(
+                json.loads(remote.TRUSTED_ORIGINS_PATH.read_text()), {'origins': []}
+            )
 
 
 if __name__=='__main__':

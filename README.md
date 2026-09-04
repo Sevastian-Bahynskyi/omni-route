@@ -92,6 +92,12 @@ The dashboard and Omnigent continue listening on loopback. Tailscale terminates
 HTTPS. No Funnel or public-internet exposure is enabled. Existing unrelated
 Serve routes are not overwritten.
 
+Omni Route synchronizes the exact server URL into Omnigent's trusted-origin
+allowlist. This keeps browser multipart requests and WebSocket connections working
+through Tailscale while preserving the local server's cross-site request guards.
+The installer refreshes the allowlist and restarts the patched daemon after every
+installation; enabling or disabling remote access updates it automatically.
+
 ## Session history import
 
 Every install automatically scans local Codex and Claude histories and imports

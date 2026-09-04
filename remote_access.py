@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import urllib.parse
 import shutil
@@ -14,6 +15,7 @@ DASHBOARD_TARGET = "http://127.0.0.1:8787"
 TAILSCALE_HTTPS_PORT = 8443
 SERVER_HTTPS_PORT = 8444
 SERVER_TARGET = "http://127.0.0.1:6767"
+TRUSTED_ORIGINS_PATH = Path.home() / ".omnigent" / "omni-route-trusted-origins.json"
 _APPROVAL_URL: str | None = None
 
 
@@ -128,6 +130,27 @@ def status() -> dict[str, Any]:
     }
 
 
+def sync_trusted_origin(remote_status: dict[str, Any] | None = None) -> str | None:
+    state = remote_status or status()
+    server_url = state.get("serverUrl")
+    origin: str | None = None
+    if isinstance(server_url, str):
+        parsed = urllib.parse.urlsplit(server_url)
+        if (
+            parsed.scheme == "https"
+            and isinstance(parsed.hostname, str)
+            and parsed.hostname.endswith(".ts.net")
+            and parsed.port == SERVER_HTTPS_PORT
+        ):
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+    TRUSTED_ORIGINS_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = TRUSTED_ORIGINS_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"origins": [origin] if origin else []}), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(TRUSTED_ORIGINS_PATH)
+    return origin
+
+
 def _approval_link(output: str) -> str | None:
     for candidate in re.findall(r"https://[^\s]+", output):
         url = urllib.parse.urlsplit(candidate)
@@ -159,6 +182,7 @@ def enable() -> dict[str, Any]:
             return {"ok": False, "error": error, "remoteAccess": after}
     _APPROVAL_URL = None
     after = status()
+    sync_trusted_origin(after)
     return {"ok": bool(after["enabled"]), "remoteAccess": after}
 
 
@@ -168,20 +192,23 @@ def disable() -> dict[str, Any]:
         if owned:
             _run("serve", "--yes", f"--https={port}", "off", timeout=8.0)
     after = status()
+    sync_trusted_origin(after)
     ok = not after["dashboardEnabled"] and not after["serverEnabled"]
     return {"ok": ok, "remoteAccess": after, **({} if ok else {"error": "Remote access could not be disabled. Check Tailscale and retry."})}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Omni Route Tailscale remote-access controller")
-    parser.add_argument("action", choices=("status", "enable", "disable"))
+    parser.add_argument("action", choices=("status", "enable", "disable", "sync-origin"))
     args = parser.parse_args()
     if args.action == "enable":
         payload = enable()
     elif args.action == "disable":
         payload = disable()
-    else:
+    elif args.action == "status":
         payload = status()
+    else:
+        payload = {"ok": True, "origin": sync_trusted_origin()}
     print(json.dumps(payload, separators=(",", ":")))
     return 0 if not isinstance(payload, dict) or payload.get("ok", True) else 1
 

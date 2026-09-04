@@ -182,6 +182,7 @@ def test_wiring(rep: Reporter) -> None:
         (SRC / "omnigent" / "codex_native_forwarder.py", "request_rotation_from_usage_error", "mid-turn quota detection"),
         (SRC / "omnigent" / "runner" / "native" / "orchestration.py", "ensure_rotation_monitor", "rotation monitor"),
         (SRC / "omnigent" / "codex_account_rotation.py", "switch-agent", "Claude handoff path"),
+        (SRC / "omnigent" / "server" / "ws_origin.py", "omni-route-trusted-origins.json", "remote trusted origin"),
     ]
     for path, needle, label in checks:
         try:

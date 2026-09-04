@@ -206,6 +206,39 @@ def patch_forwarder(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_trusted_origins(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "import logging\nimport os\n",
+        "import json\nimport logging\nimport os\nfrom pathlib import Path\n",
+        "trusted origin file imports",
+    )
+    text = replace_once(
+        text,
+        '_ALLOWED_ORIGINS_ENV = "OMNIGENT_WS_ALLOWED_ORIGINS"\n',
+        '_ALLOWED_ORIGINS_ENV = "OMNIGENT_WS_ALLOWED_ORIGINS"\n'
+        '_ALLOWED_ORIGINS_FILE = Path.home() / ".omnigent" / "omni-route-trusted-origins.json"\n',
+        "trusted origin file path",
+    )
+    old = '''    raw = os.environ.get(_ALLOWED_ORIGINS_ENV, "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+'''
+    new = '''    raw = os.environ.get(_ALLOWED_ORIGINS_ENV, "")
+    allowed = {part.strip() for part in raw.split(",") if part.strip()}
+    try:
+        payload = json.loads(_ALLOWED_ORIGINS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    origins = payload.get("origins", []) if isinstance(payload, dict) else []
+    if isinstance(origins, list):
+        allowed.update(origin for origin in origins if isinstance(origin, str) and origin)
+    return frozenset(allowed)
+'''
+    text = replace_once(text, old, new, "read Omni Route trusted origins")
+    path.write_text(text, encoding="utf-8")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: apply_patch.py /path/to/omnigent")
@@ -233,6 +266,7 @@ def main() -> None:
     patch_claude_forwarder(root / "omnigent" / "claude_native_forwarder.py")
     patch_executor(root / "omnigent" / "inner" / "codex_native_executor.py")
     patch_forwarder(root / "omnigent" / "codex_native_forwarder.py")
+    patch_trusted_origins(root / "omnigent" / "server" / "ws_origin.py")
 
     print("Omnigent subscription-rotation patch applied successfully.")
 

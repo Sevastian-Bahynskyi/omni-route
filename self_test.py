@@ -222,6 +222,16 @@ def test_patcher_synthetic() -> None:
         patcher.patch_forwarder(forwarder)
         assert "request_rotation_from_usage_error" in forwarder.read_text(encoding="utf-8")
 
+        trusted_origins = td / "ws_origin.py"
+        trusted_origins.write_text(
+            'import logging\nimport os\n_ALLOWED_ORIGINS_ENV = "OMNIGENT_WS_ALLOWED_ORIGINS"\n\n'
+            'def parse_allowed_origins() -> frozenset[str]:\n'
+            '    raw = os.environ.get(_ALLOWED_ORIGINS_ENV, "")\n'
+            '    return frozenset(part.strip() for part in raw.split(",") if part.strip())\n'
+        )
+        patcher.patch_trusted_origins(trusted_origins)
+        assert "omni-route-trusted-origins.json" in trusted_origins.read_text(encoding="utf-8")
+
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as td:
