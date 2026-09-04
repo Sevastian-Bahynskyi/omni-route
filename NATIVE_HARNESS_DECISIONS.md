@@ -20,13 +20,24 @@ restart/recovery and the routing dashboard.
 ## 2. Account isolation
 
 **Codex** — one shared `CODEX_HOME`. Rotation hot-swaps `auth.json` inside it.
-Sessions and rollouts never move. Codex Desktop resolves its account from
-`CODEX_HOME/auth.json`, so the desktop app follows the swap.
+Sessions and rollouts never move.
 
-**Claude** — one `CLAUDE_CONFIG_DIR` per account, reusing the existing
-`~/.omnigent/claude-accounts/claude-N` profiles and their per-profile Keychain
-entries. Fallback if Claude Desktop ignores `CLAUDE_CONFIG_DIR`: a per-account
-Electron `--user-data-dir`.
+Note: "Codex Desktop" is **`/Applications/ChatGPT.app`**. The standalone
+`Codex.app` is legacy — its Homebrew cask is deprecated upstream with
+`chatgpt` named as the replacement — and the `codex` CLI itself resolves the
+desktop app to `ChatGPT.app`, reporting it under "Desktop App" in
+`codex doctor`.
+
+**Claude** — one Electron `--user-data-dir` per account. This is the
+pre-authorised fallback, adopted because gate 2 disproved the first choice:
+Claude Desktop's account identity lives in its Electron user-data directory,
+not in `CLAUDE_CONFIG_DIR`. See "Gate results" below.
+
+`CLAUDE_CONFIG_DIR` is still set alongside it, pointing at the matching
+`~/.omnigent/claude-accounts/claude-N` profile, because Claude Code
+configuration — settings, hooks, scheduled tasks — is read from there. The two
+are set together: the user-data-dir carries the *account*, the config dir
+carries the *configuration*.
 
 **Concurrency is forbidden.** One account at a time per provider. A request to
 run two sessions of the same provider on two accounts is rejected, not queued.
@@ -167,3 +178,68 @@ Ordered. Each can invalidate a decision above.
 5. A self-gating automation fires and actually starts a turn after a relaunch,
    on both apps.
 6. Full unattended loop: Codex A -> Codex B, Claude A -> Claude B.
+
+---
+
+## Gate results
+
+Run 2026-09-04 on macOS 26.6.2 (arm64).
+
+### Gate 1 — install both desktop apps: **PASS**
+
+- **Codex Desktop = `/Applications/ChatGPT.app`**, version 26.831.21537, already
+  installed. `codex doctor` reports "the desktop application is installed" and
+  resolves the `codex` binary from inside the bundle
+  (`/Applications/ChatGPT.app/Contents/Resources/codex`). The separate
+  `Codex.app` cask is deprecated upstream ("replacement: `brew install --cask
+  chatgpt`"), so no second app is installed.
+- **Claude Desktop** installed via the official Homebrew cask (sourced from
+  `claude.com/download`): `com.anthropic.claudefordesktop` 1.46388.2, Electron.
+
+### Gate 2 — Claude account isolation: **FAIL for `CLAUDE_CONFIG_DIR`, PASS for `--user-data-dir`**
+
+Launching `Claude.app` with `CLAUDE_CONFIG_DIR` set to an empty directory left
+that directory untouched, and did not write to `~/.claude` either. The app wrote
+its state to `~/Library/Application Support/Claude/` — a standard Electron
+user-data directory (`Cookies`, `Local Storage`, `IndexedDB`, `Preferences`).
+The account is therefore a web session held in the user-data directory, and
+`CLAUDE_CONFIG_DIR` cannot isolate it.
+
+Launching with `--user-data-dir=<path>` created a complete, separate profile
+(26 entries including its own `Cookies` and `Local Storage`) within 7 seconds.
+
+**Consequence:** decision §2 is amended. Claude account isolation uses
+`--user-data-dir`, with `CLAUDE_CONFIG_DIR` set alongside it for configuration.
+Each account needs a one-time interactive sign-in in its own profile, because a
+fresh user-data directory starts logged out. This is a user action and must be
+surfaced by the dashboard as `needs user action`, not attempted automatically.
+
+### Gate 3 — Codex account isolation: **PASS**
+
+`codex app-server` speaks newline-delimited JSON-RPC over stdio and honours
+`CODEX_HOME`. `initialize` echoes back the resolved `codexHome`, and
+`account/read` returns the authenticated account:
+
+| CODEX_HOME | account |
+| --- | --- |
+| `~/.omnigent/codex-accounts/codex-1` | `support@…` (plus) |
+| `~/.omnigent/codex-accounts/codex-2` | `baginski.play@…` (plus) |
+| `~/.codex` (default) | `support@…` (plus) |
+
+`account/rateLimits/read` confirms the window shapes assumed in §3:
+`primary.windowDurationMins = 300` (the 5-hour window) and
+`secondary.windowDurationMins = 10080` (weekly).
+
+Two further consequences:
+
+- The pre-flight identity check of §7 needs no network call and no app-server at
+  all in the cheap path: `auth.json` embeds an `id_token` whose claims carry the
+  account email and `chatgpt_account_id`.
+- The Omnigent-coupled quota read is replaced. `codex_app_client.py` implements
+  the client directly, with no Omnigent import.
+
+### Gates 4-6 — not yet run
+
+4. Stop-hook injection (the last load-bearing unknown).
+5. Self-gating automation fires and starts a turn after relaunch.
+6. Full unattended loop.
