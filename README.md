@@ -59,6 +59,10 @@ omni-rotate help
 The dashboard runs on `http://127.0.0.1:8787/` and opens automatically after a
 successful `install.sh`.
 
+![Omni Route dashboard overview](docs/images/dashboard-overview.png)
+
+![Omni Route dashboard on a phone-sized screen](docs/images/dashboard-mobile.png)
+
 It shows account emails/status, the automatic route chain, current routed
 provider, installation health and diagnostics. Accounts from either provider can be dragged in
 the route chain; the saved order is the actual priority used for new account
