@@ -121,7 +121,7 @@ It should show/control at least:
 
 ## Implementation order
 
-1. **Grill first.** Run one `/grill-me` pass before implementation, maximum 5 questions, focused only on unresolved product decisions. Do not start implementation until the answers are recorded.
+1. **Grill first.** Run one `/grill-me` pass before implementation, maximum 5 questions, focused only on unresolved product decisions. Do not start implementation until the answers are recorded. **Done — answers recorded in [`NATIVE_HARNESS_DECISIONS.md`](NATIVE_HARNESS_DECISIONS.md), which also amends acceptance criteria 3 and 4 below.**
 2. **Prove same-provider native reload.** Verify Codex A -> Codex B and Claude A -> Claude B with exact native-session continuation and account verification.
 3. **Build the minimal supervisor lifecycle.** Start, monitor, rotate, restart, verify, resume, stop.
 4. **Move threshold control into the dashboard.** Enforce max 95% and automatic preparation threshold = switch threshold - 3%.
@@ -135,8 +135,8 @@ The native-first rewrite is ready only when:
 
 1. Codex uses the full native Codex desktop experience.
 2. Claude uses the full native Claude experience.
-3. Codex account rotation restarts and resumes the exact native Codex session automatically.
-4. Claude account rotation restarts and resumes the exact native Claude session automatically.
+3. Codex account rotation restarts and resumes the exact task in the same workspace automatically, via committed state plus handoff, with no user re-explanation.
+4. Claude account rotation restarts and resumes the exact task in the same workspace automatically, via committed state plus handoff, with no user re-explanation.
 5. The dashboard threshold is user-configurable and cannot exceed 95%.
 6. Preparation mode starts automatically 3 percentage points before the configured threshold.
 7. Codex <-> Claude can continue the same task through a concise handoff without the user restating it.
