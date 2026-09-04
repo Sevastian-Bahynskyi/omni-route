@@ -238,8 +238,32 @@ Two further consequences:
 - The Omnigent-coupled quota read is replaced. `codex_app_client.py` implements
   the client directly, with no Omnigent import.
 
-### Gates 4-6 — not yet run
+### Gate 4 — Stop-hook injection: **PASS**
 
-4. Stop-hook injection (the last load-bearing unknown).
+The load-bearing unknown is resolved. A `Stop` hook **can** make the running
+agent do additional work before the turn ends.
+
+Mechanism: the hook exits with **code 2** and writes the instruction to
+**stderr**. The instruction is fed back to the agent, which acts on it and then
+stops. JSON output is not needed and `decision`/`reason` fields are not
+required.
+
+Verified end to end in a scratch workspace: the hook told the agent it was about
+to lose quota and must write `handoff.md`. The agent wrote the file with the
+exact required contents and reported "Done — handoff.md written with the
+required contents." Confirmed working in headless `claude -p` mode, so it does
+not depend on an interactive session.
+
+**Mandatory implementation detail:** the hook must be guarded by a marker file.
+Exit 2 prevents stopping, so an unguarded Stop hook loops forever. The test hook
+wrote `.hook-fired` on first invocation and exited 0 on every later one. The
+production hook must do the same, keyed per rotation, and must exit 0 whenever
+no rotation is armed.
+
+This confirms §4 (preparation-threshold wrap-up and turn-boundary rotation) and
+§5 (outgoing agent writes the handoff) are implementable as specified.
+
+### Gates 5-6 — not yet run
+
 5. Self-gating automation fires and starts a turn after relaunch.
 6. Full unattended loop.
