@@ -124,6 +124,56 @@ def trust_workspace(workspace: Path, *, claude_config_dir: Path | None = None) -
     return True
 
 
+# Tools the rotation continuation needs before it can do anything useful.
+# bypassPermissions is deliberately not used: it is opt-in per account
+# (bypassPermissionsOptInByAccount in the app), and when an account has not
+# opted in the app silently downgrades the task to "default", which then stalls
+# on its first tool call with nobody present to approve it.
+UNATTENDED_ALLOW = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
+
+
+def ensure_unattended_settings(
+    claude_config_dir: Path | None = None, *, allow: list[str] | None = None
+) -> bool:
+    """Grant a profile the permissions a scheduled session needs.
+
+    Allow rules in the profile's settings.json apply to scheduled-task sessions,
+    so this is the file-based equivalent of answering permission prompts that
+    nobody is there to answer. Returns True when the file had to change.
+    """
+    settings_path = config_dir(claude_config_dir) / "settings.json"
+    wanted = list(allow if allow is not None else UNATTENDED_ALLOW)
+
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SchedulerError(f"{settings_path} is not valid JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise SchedulerError(f"{settings_path} is not a JSON object")
+    else:
+        settings_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data = {}
+
+    permissions = data.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        raise SchedulerError(f"{settings_path} permissions is not a JSON object")
+    existing = permissions.get("allow")
+    existing = list(existing) if isinstance(existing, list) else []
+
+    missing = [rule for rule in wanted if rule not in existing]
+    mode_ok = permissions.get("defaultMode") == "acceptEdits"
+    if not missing and mode_ok:
+        return False
+
+    permissions["allow"] = existing + missing
+    permissions["defaultMode"] = "acceptEdits"
+    temporary = settings_path.with_name(f".{settings_path.name}.omni-route-tmp")
+    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary.replace(settings_path)
+    return True
+
+
 def config_dir(explicit: Path | None = None) -> Path:
     return Path(explicit) if explicit else Path.home() / ".claude"
 
@@ -198,7 +248,7 @@ def build_record(
     skill_file: Path,
     workspace: Path,
     cron: str | None = ROTATION_CRON,
-    permission_mode: str = "bypassPermissions",
+    permission_mode: str = "acceptEdits",
     display_name: str = "Omni Route rotation",
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
@@ -236,6 +286,8 @@ def install(
     if not dry_run:
         # Untrusted folders make scheduled sessions stall and report "Skipped".
         trust_workspace(workspace, claude_config_dir=claude_config_dir)
+        # A session with no permissions stalls on its first tool call.
+        ensure_unattended_settings(claude_config_dir)
     store = find_store(Path(user_data_dir), account_uuid)
     data = load_store(store)
     skill_file = write_skill(
