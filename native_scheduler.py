@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Register the self-gating rotation automation in Claude Desktop.
+
+Claude Desktop stores a scheduled task in two places:
+
+  * the prompt, at ``~/.claude/scheduled-tasks/<id>/SKILL.md``
+    (or under ``CLAUDE_CONFIG_DIR`` when set);
+  * the metadata, as JSON at
+    ``<user-data-dir>/claude-code-sessions/<accountUuid>/<uuid>/scheduled-tasks.json``.
+
+The metadata file is an undocumented internal format, so every write here
+validates the file's shape first, keeps a backup, and refuses rather than
+guessing. A refusal is reported to the caller so the supervisor can surface
+``needs user action`` instead of silently continuing.
+
+The app caches this file in memory. Only write while Claude Desktop is stopped;
+the rotation sequence already guarantees that.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+TASK_ID = "omni-route-rotation"
+ROTATION_CRON = "*/5 * * * *"
+SESSIONS_DIRNAME = "claude-code-sessions"
+STORE_NAME = "scheduled-tasks.json"
+
+
+class SchedulerError(RuntimeError):
+    """The task store is missing or does not match the expected shape."""
+
+
+@dataclass(frozen=True)
+class TaskStore:
+    path: Path
+    account_uuid: str
+
+
+def rotation_prompt(workspace: Path) -> str:
+    """The self-gating prompt. Harmless when there is nothing to do."""
+    marker = Path(workspace) / ".omni-route" / "handoff-pending"
+    latest = Path(workspace) / ".omni-route" / "handoff-latest.md"
+    return f"""First, check whether `{marker}` exists.
+
+If it does NOT exist, stop immediately and reply with exactly: no pending handoff.
+Do not investigate, do not read other files, do not start any work.
+
+If it DOES exist, an account rotation just happened and you are continuing work
+that another agent started:
+
+1. Read `{latest}`.
+2. Verify the repository state yourself with `git status` and `git log`. The
+   repository is the source of truth; the handoff is only a pointer.
+3. Delete `{marker}` so this task does not pick the same handoff up again.
+4. Carry out the "Exact next action" from the handoff, and keep going.
+
+Do not restate the task back to the user or ask them to repeat anything. They
+should not have to notice that the account changed."""
+
+
+def config_dir(explicit: Path | None = None) -> Path:
+    return Path(explicit) if explicit else Path.home() / ".claude"
+
+
+def skill_path(task_id: str = TASK_ID, *, claude_config_dir: Path | None = None) -> Path:
+    return config_dir(claude_config_dir) / "scheduled-tasks" / task_id / "SKILL.md"
+
+
+def write_skill(
+    prompt: str,
+    *,
+    task_id: str = TASK_ID,
+    description: str = "Omni Route rotation continuation",
+    claude_config_dir: Path | None = None,
+) -> Path:
+    path = skill_path(task_id, claude_config_dir=claude_config_dir)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    body = f"---\nname: {task_id}\ndescription: {description}\n---\n\n{prompt}\n"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def find_store(user_data_dir: Path, account_uuid: str | None = None) -> TaskStore:
+    """Locate the scheduled-task metadata file for an account.
+
+    Raises SchedulerError when no existing store is found. A store is never
+    created from nothing: the app owns that directory layout, and inventing one
+    is exactly the kind of guess that should surface as `needs user action`.
+    """
+    sessions = Path(user_data_dir) / SESSIONS_DIRNAME
+    if not sessions.is_dir():
+        raise SchedulerError(f"no {SESSIONS_DIRNAME} directory under {user_data_dir}")
+    roots = [sessions / account_uuid] if account_uuid else sorted(
+        p for p in sessions.iterdir() if p.is_dir()
+    )
+    candidates: list[TaskStore] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for store in sorted(root.glob(f"*/{STORE_NAME}")):
+            candidates.append(TaskStore(path=store, account_uuid=root.name))
+    if not candidates:
+        raise SchedulerError(
+            f"no {STORE_NAME} under {sessions}"
+            f"{' for account ' + account_uuid if account_uuid else ''};"
+            " open Claude Desktop once and create any scheduled task"
+        )
+    # Prefer the most recently modified store when an account has several.
+    candidates.sort(key=lambda c: c.path.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def load_store(store: TaskStore) -> dict[str, Any]:
+    try:
+        data = json.loads(store.path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SchedulerError(f"{store.path} is unreadable: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SchedulerError(f"{store.path} is not a JSON object")
+    tasks = data.get("scheduledTasks")
+    if not isinstance(tasks, list):
+        raise SchedulerError(f"{store.path} has no scheduledTasks list")
+    for entry in tasks:
+        if not isinstance(entry, dict) or "id" not in entry:
+            raise SchedulerError(f"{store.path} contains an unexpected task record")
+    return data
+
+
+def build_record(
+    *,
+    task_id: str,
+    skill_file: Path,
+    workspace: Path,
+    cron: str | None = ROTATION_CRON,
+    permission_mode: str = "bypassPermissions",
+    display_name: str = "Omni Route rotation",
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "id": task_id,
+        "displayName": display_name,
+        "enabled": True,
+        "filePath": str(skill_file),
+        "createdAt": int(time.time() * 1000),
+        "cwd": str(Path(workspace).resolve()),
+        # A worktree would place the continuation in a new tree, away from the
+        # branch the outgoing agent committed to. Must stay false.
+        "useWorktree": False,
+        # The app otherwise staggers runs by minutes, which is latency on every
+        # rotation.
+        "disableJitter": True,
+        "permissionMode": permission_mode,
+    }
+    if cron:
+        record["cronExpression"] = cron
+    return record
+
+
+def install(
+    user_data_dir: Path,
+    workspace: Path,
+    *,
+    account_uuid: str | None = None,
+    claude_config_dir: Path | None = None,
+    task_id: str = TASK_ID,
+    cron: str | None = ROTATION_CRON,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Install or update the rotation automation. Returns a result summary."""
+    store = find_store(Path(user_data_dir), account_uuid)
+    data = load_store(store)
+    skill_file = write_skill(
+        rotation_prompt(Path(workspace)),
+        task_id=task_id,
+        claude_config_dir=claude_config_dir,
+    ) if not dry_run else skill_path(task_id, claude_config_dir=claude_config_dir)
+
+    record = build_record(
+        task_id=task_id, skill_file=skill_file, workspace=Path(workspace), cron=cron
+    )
+    tasks: list[dict[str, Any]] = data["scheduledTasks"]
+    existing = next((t for t in tasks if t.get("id") == task_id), None)
+    action = "updated" if existing else "created"
+    if existing is not None:
+        # Preserve createdAt so the app does not treat it as a brand new task.
+        record["createdAt"] = existing.get("createdAt", record["createdAt"])
+        tasks[[t.get("id") for t in tasks].index(task_id)] = {**existing, **record}
+    else:
+        tasks.append(record)
+
+    if dry_run:
+        return {"action": f"would be {action}", "store": str(store.path), "record": record}
+
+    backup = store.path.with_suffix(f".json.omni-route-backup-{int(time.time())}")
+    shutil.copy2(store.path, backup)
+    temporary = store.path.with_suffix(".json.omni-route-tmp")
+    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary.replace(store.path)
+    return {
+        "action": action,
+        "store": str(store.path),
+        "backup": str(backup),
+        "account_uuid": store.account_uuid,
+        "skill": str(skill_file),
+        "record": record,
+    }
+
+
+def remove(
+    user_data_dir: Path, *, account_uuid: str | None = None, task_id: str = TASK_ID
+) -> bool:
+    store = find_store(Path(user_data_dir), account_uuid)
+    data = load_store(store)
+    tasks = data["scheduledTasks"]
+    remaining = [t for t in tasks if t.get("id") != task_id]
+    if len(remaining) == len(tasks):
+        return False
+    data["scheduledTasks"] = remaining
+    backup = store.path.with_suffix(f".json.omni-route-backup-{int(time.time())}")
+    shutil.copy2(store.path, backup)
+    temporary = store.path.with_suffix(".json.omni-route-tmp")
+    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary.replace(store.path)
+    return True
