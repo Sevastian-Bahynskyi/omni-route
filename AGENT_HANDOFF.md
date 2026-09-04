@@ -203,12 +203,12 @@ The implementation handles current and older field naming variants where relevan
 When an account is exhausted:
 
 1. it is placed on cooldown until a known reset time, or a conservative fallback cooldown if no reset is available;
-2. the session is rebound to the next available account in route order;
+2. the session is rebound to the next available account of the same provider in route order;
 3. the same Omnigent session is relaunched;
 4. the same Codex thread/rollout is resumed;
 5. if the previous turn was interrupted by quota, Omni Route injects a continuation instruction so work continues automatically.
 
-If no account of either provider is available, the runtime enters an exhausted state with a clear detail rather than silently failing over to an API provider.
+If no account of the active provider is available, the runtime enters an exhausted state with a clear detail. Cross-provider changes require an explicit dashboard selection.
 
 ---
 
@@ -250,7 +250,8 @@ Manual switching should:
 - keep the same Omnigent session/workspace;
 - keep route ordering unchanged;
 - not falsely mark the previous account quota-exhausted;
-- not inject the automatic quota-fallback continuation prompt.
+- inject a continuation handoff only when changing providers;
+- relaunch without a continuation prompt when selecting another account of the same provider.
 
 Relevant helpers:
 

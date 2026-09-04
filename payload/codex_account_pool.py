@@ -173,10 +173,22 @@ class CodexAccountPool:
             state["current_account"] = account.name
             return account
 
-    def rotate_session(self, session_id: str, *, exhausted_account: str | None, retry_at: int | None, reason: str) -> AccountProfile | None:
+    def rotate_session(
+        self,
+        session_id: str,
+        *,
+        exhausted_account: str | None,
+        retry_at: int | None,
+        reason: str,
+        provider: str | None = None,
+    ) -> AccountProfile | None:
         if not self.enabled:
             return None
         now = int(self._now())
+        selected_provider = provider
+        if selected_provider is None and exhausted_account:
+            exhausted_profile = self._by_name(exhausted_account)
+            selected_provider = exhausted_profile.provider if exhausted_profile else None
         with self._locked_state() as state:
             self._prune(state, now)
             if exhausted_account:
@@ -185,7 +197,12 @@ class CodexAccountPool:
                     "reason": reason,
                     "marked_at": now,
                 }
-            account = self._choose(state, now, exclude={exhausted_account} if exhausted_account else set())
+            account = self._choose(
+                state,
+                now,
+                exclude={exhausted_account} if exhausted_account else set(),
+                provider=selected_provider,
+            )
             bindings = state.setdefault("session_bindings", {})
             if account is None:
                 bindings.pop(session_id, None)

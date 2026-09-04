@@ -117,13 +117,14 @@ The importer:
 
 ## Routing behavior
 
-Accounts are attempted in dashboard route order regardless of provider. Before a
-new Codex turn Omni Route checks Codex rate limits. At the configured threshold
-(default 99%), or on a provider usage-limit error, the current account is cooled
-down and the same Omnigent session continues on the next available account.
-Claude accounts participate in the same routing and cooldown logic. Provider
-changes preserve the workspace and accumulated conversation context. When all
-accounts are unavailable the router reports exhaustion until an account recovers.
+New sessions use the first available account in dashboard route order. Automatic
+quota rotation stays with the session's current provider: Codex rotates through
+Codex accounts and Claude rotates through Claude accounts. A provider change only
+happens when the user selects an account from the other provider in the dashboard.
+That explicit switch keeps the same Omnigent session and workspace, then sends a
+continuation handoff through the new native harness. When all accounts for the
+active provider are unavailable the router reports exhaustion until one recovers
+or the user explicitly switches providers.
 
 Manual dashboard provider switches do not mark an account exhausted and do not
 inject an automatic continuation prompt.

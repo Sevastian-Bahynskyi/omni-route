@@ -54,8 +54,13 @@ def _selected_session_id() -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _latest_runtime() -> dict[str, Any]:
+def _latest_runtime(valid_session_ids: set[str] | None = None) -> dict[str, Any]:
     candidates = _runtime_candidates()
+    if valid_session_ids is not None:
+        candidates = [
+            candidate for candidate in candidates
+            if candidate[1].get("session_id") in valid_session_ids
+        ]
     selected = _selected_session_id()
     if selected:
         match = next((runtime for _, runtime in candidates if runtime.get("session_id") == selected), None)
@@ -164,7 +169,8 @@ _original_collect_status = base.collect_status
 
 def collect_status() -> dict[str, Any]:
     data = _original_collect_status()
-    runtime = _latest_runtime()
+    sessions = _routed_sessions()
+    runtime = _latest_runtime({session["sessionId"] for session in sessions})
     mode = runtime.get("mode") if isinstance(runtime.get("mode"), str) else None
     session_id = runtime.get("session_id") if isinstance(runtime.get("session_id"), str) else None
     if mode in {"codex", "claude", "claude_pending", "switch_pending"} and isinstance(runtime.get("account_name"), str):
@@ -179,7 +185,6 @@ def collect_status() -> dict[str, Any]:
     router["runtimeMode"] = mode
     router["sessionId"] = session_id
     router["phase"] = runtime.get("phase", "active")
-    sessions = _routed_sessions()
     data["sessions"] = sessions
     current_session = next((session for session in sessions if session["sessionId"] == session_id), None)
     router["actualProvider"] = current_session.get("actualProvider") if current_session else None
@@ -199,11 +204,16 @@ def collect_status() -> dict[str, Any]:
 
     route = data.get("accounts", [])
     current_index = next((index for index, account in enumerate(route) if account.get("name") == provider), -1)
+    current_kind = next((account.get("provider") for account in route if account.get("name") == provider), None)
     next_account = None
     if route:
         for offset in range(1, len(route) + 1):
             candidate = route[(current_index + offset) % len(route)]
-            if candidate.get("status") in {"ready", "active"} and candidate.get("name") != provider:
+            if (
+                candidate.get("status") in {"ready", "active"}
+                and candidate.get("name") != provider
+                and candidate.get("provider") == current_kind
+            ):
                 next_account = candidate.get("name")
                 break
     router["nextAccount"] = next_account

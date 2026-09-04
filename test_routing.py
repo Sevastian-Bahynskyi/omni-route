@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from omnigent import codex_account_pool as accounts
 from omnigent import codex_account_rotation as rotation
+import switch_provider as manual_switch
 
 
 class RoutingTests(unittest.TestCase):
@@ -17,9 +18,10 @@ class RoutingTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.a = accounts.AccountProfile('codex-a', self.root / 'a.json')
+        self.d = accounts.AccountProfile('codex-d', self.root / 'd.json')
         self.b = accounts.AccountProfile('claude-b', provider='claude', config_dir=self.root / 'b')
         self.c = accounts.AccountProfile('claude-c', provider='claude', config_dir=self.root / 'c')
-        self.pool = accounts.CodexAccountPool(accounts.PoolConfig((self.a, self.b, self.c)), state_path=self.root / 'state.json', now=lambda: 1000)
+        self.pool = accounts.CodexAccountPool(accounts.PoolConfig((self.a, self.b, self.d, self.c)), state_path=self.root / 'state.json', now=lambda: 1000)
         self.auth = patch.object(accounts, 'account_has_credential', return_value=True)
         self.auth.start()
         self.addCleanup(self.auth.stop)
@@ -37,7 +39,7 @@ class RoutingTests(unittest.TestCase):
             self.pool.account_for_session('switching-agent', provider='claude'),
             self.b,
         )
-        self.assertEqual(self.pool.rotate_session('s', exhausted_account=self.a.name, retry_at=2000, reason='quota'), self.b)
+        self.assertEqual(self.pool.rotate_session('s', exhausted_account=self.a.name, retry_at=2000, reason='quota'), self.d)
         self.assertEqual(self.pool.rotate_session('s', exhausted_account=self.b.name, retry_at=2000, reason='quota'), self.c)
         self.assertIsNone(self.pool.rotate_session('s', exhausted_account=self.c.name, retry_at=2000, reason='quota'))
         self.pool._now = lambda: 2001
@@ -59,19 +61,13 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn('CLAUDE_SECURESTORAGE_CONFIG_DIR', env)
         self.assertEqual(env['CLAUDE_CONFIG_DIR'], str(self.b.config_dir))
 
-    def test_cross_provider_both_directions(self) -> None:
-        for current, target in ((self.a, self.b), (self.b, self.a)):
-            with self.subTest(current=current.provider):
-                bridge = self.root / current.name
-                accounts.record_runtime_account(bridge, session_id='s', account_name=current.name, provider=current.provider)
-                accounts.request_rotation(bridge, session_id='s', account_name=current.name, retry_at=2000, reason='quota', replay_required=True)
-                with patch.object(accounts.CodexAccountPool, 'from_default', return_value=self.pool), patch.object(rotation, 'switch_to_account', new_callable=AsyncMock) as switch:
-                    # Clear the previous scenario's cooldowns.
-                    with self.pool._locked_state() as state:
-                        state['cooldowns'] = {}
-                    asyncio.run(rotation._monitor(session_id='s', bridge_dir=bridge, pool=self.pool, server_client=None, relaunch=AsyncMock()))
-                self.assertEqual(switch.await_args.kwargs['profile'], target)
-                self.assertTrue(switch.await_args.kwargs['continue_after_switch'])
+    def test_parallel_sessions_keep_independent_provider_bindings(self) -> None:
+        self.assertEqual(self.pool.account_for_session('codex-session', provider='codex'), self.a)
+        self.assertEqual(self.pool.account_for_session('claude-session', provider='claude'), self.b)
+        self.assertEqual(self.pool.rotate_session('codex-session', exhausted_account=self.a.name, retry_at=2000, reason='quota'), self.d)
+        snapshot = self.pool.snapshot()['session_bindings']
+        self.assertEqual(snapshot['codex-session'], self.d.name)
+        self.assertEqual(snapshot['claude-session'], self.b.name)
 
     def test_claude_to_claude_manual_does_not_cool_or_continue(self) -> None:
         async def scenario() -> None:
@@ -132,6 +128,38 @@ class RoutingTests(unittest.TestCase):
             self.assertTrue(client.post.await_args_list[0].args[0].endswith('/switch-agent'))
             self.assertTrue(client.post.await_args_list[1].args[0].endswith('/events'))
             self.assertEqual(accounts.read_runtime(self.root)['phase'], 'selected')
+        asyncio.run(scenario())
+
+    def test_manual_same_provider_relaunches_native_terminal(self) -> None:
+        async def scenario() -> None:
+            response = unittest.mock.Mock()
+            response.status_code = 200
+            response.json.return_value = {
+                'data': [{
+                    'id': 'terminal_codex_main',
+                    'metadata': {'terminal_name': 'codex', 'session_key': 'main'},
+                }],
+            }
+            response.raise_for_status.return_value = None
+            client = AsyncMock()
+            client.get.return_value = response
+            client.delete.return_value = response
+            client.post.return_value = response
+            await manual_switch._close_native_terminal(client, 's', 'codex')
+            await manual_switch._launch_native_terminal(client, 's', 'codex')
+            self.assertTrue(client.delete.await_args.args[0].endswith('/terminal_codex_main'))
+            self.assertEqual(client.post.await_args.kwargs['json']['ensure_native_terminal'], True)
+        asyncio.run(scenario())
+
+    def test_manual_cross_provider_handoff_continues_existing_session(self) -> None:
+        async def scenario() -> None:
+            response = unittest.mock.Mock()
+            response.raise_for_status.return_value = None
+            client = AsyncMock()
+            client.post.return_value = response
+            await manual_switch._continue_provider_handoff(client, 's')
+            request = client.post.await_args.kwargs['json']
+            self.assertIn('existing conversation and workspace state', request['data']['content'][0]['text'])
         asyncio.run(scenario())
 
 

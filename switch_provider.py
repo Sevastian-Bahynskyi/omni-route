@@ -112,6 +112,50 @@ async def _close_native_terminal(client: Any, session_id: str, provider: str) ->
             if closed.status_code != 404:
                 closed.raise_for_status()
 
+
+async def _launch_native_terminal(client: Any, session_id: str, provider: str) -> None:
+    encoded = urllib.parse.quote(session_id, safe="")
+    launched = await client.post(
+        f"/v1/sessions/{encoded}/resources/terminals",
+        json={
+            "terminal": provider,
+            "session_key": "main",
+            "ensure_native_terminal": True,
+        },
+        timeout=30.0,
+    )
+    launched.raise_for_status()
+
+
+async def _continue_provider_handoff(client: Any, session_id: str) -> None:
+    encoded = urllib.parse.quote(session_id, safe="")
+    body = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": (
+                    "Continue this task after the explicit provider handoff. "
+                    "Use the existing conversation and workspace state, preserve completed work "
+                    "and constraints, and continue from the latest unfinished objective."
+                ),
+            }],
+        },
+    }
+    for _ in range(20):
+        response = await client.post(
+            f"/v1/sessions/{encoded}/events",
+            json=body,
+            timeout=20.0,
+        )
+        if response.status_code not in {409, 503}:
+            response.raise_for_status()
+            return
+        await asyncio.sleep(0.5)
+    response.raise_for_status()
+
+
 async def switch_provider(provider: str, *, session_id: str | None = None) -> dict[str, Any]:
     from omnigent.codex_account_pool import (
         CodexAccountPool, account_has_credential,
@@ -155,8 +199,10 @@ async def switch_provider(provider: str, *, session_id: str | None = None) -> di
             raise RuntimeError("This account is unavailable.")
         if actual_provider == target.provider:
             await _close_native_terminal(client, session_id, actual_provider)
+            await _launch_native_terminal(client, session_id, actual_provider)
         else:
             await _switch_agent(client, session_id, f"{target.provider}-native-ui")
+            await _continue_provider_handoff(client, session_id)
         record_runtime_account(
             bridge,
             session_id=session_id,

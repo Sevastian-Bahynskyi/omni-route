@@ -23,7 +23,7 @@ class DashboardTests(unittest.TestCase):
             patcher = patch.object(base, key, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        for key, value in {"_latest_runtime": {}, "_remote_status": {}}.items():
+        for key, value in {"_remote_status": {}}.items():
             patcher = patch.object(dashboard, key, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -44,6 +44,12 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(status["router"]["currentProvider"], "claude-2")
         self.assertEqual([account["status"] for account in status["accounts"]], ["ready", "cooldown", "active"])
         self.assertEqual(status["accounts"][2]["sessions"], 1)
+
+    def test_stale_selected_runtime_falls_back_to_live_session(self) -> None:
+        stale = {"session_id": "stale", "account_name": "codex-1", "mode": "codex"}
+        live = {"session_id": "live", "account_name": "claude-2", "mode": "claude"}
+        with patch.object(dashboard, "_runtime_candidates", return_value=[(2.0, stale), (1.0, live)]), patch.object(dashboard, "_selected_session_id", return_value="stale"):
+            self.assertEqual(dashboard._latest_runtime({"live"}), live)
 
     def test_claude_first_reorder_preserves_bindings_and_rejects_partial_order(self) -> None:
         state = json.dumps({"session_bindings": {"s1": "codex-1"}})
