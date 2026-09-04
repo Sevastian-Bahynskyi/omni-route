@@ -136,5 +136,32 @@ class DashboardTests(unittest.TestCase):
             switch.assert_called_once_with("claude-2", None)
 
 
+class ThresholdTests(unittest.TestCase):
+    """The dashboard threshold must be user-settable but never above the cap."""
+
+    def test_clamps_to_maximum(self) -> None:
+        self.assertEqual(base.clamp_threshold(99), 95.0)
+        self.assertEqual(base.clamp_threshold(1000), 95.0)
+        self.assertEqual(base.clamp_threshold(80), 80.0)
+
+    def test_preparation_is_three_points_below(self) -> None:
+        self.assertEqual(base.preparation_percent(95), 92.0)
+        self.assertEqual(base.preparation_percent(80), 77.0)
+
+    def test_status_exposes_threshold_fields(self) -> None:
+        router = base.collect_status()["router"]
+        self.assertLessEqual(router["threshold"], router["maxThreshold"])
+        self.assertEqual(
+            router["preparationThreshold"],
+            base.preparation_percent(router["threshold"]),
+        )
+
+    def test_rejects_non_numeric(self) -> None:
+        with self.assertRaises(ValueError):
+            base.update_threshold("abc")
+        with self.assertRaises(ValueError):
+            base.update_threshold(0)
+
+
 if __name__ == "__main__":
     unittest.main()

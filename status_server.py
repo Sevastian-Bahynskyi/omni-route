@@ -19,6 +19,38 @@ from typing import Any
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
+
+# The dashboard may not set a switch threshold above this. A stored value above
+# it is clamped rather than rejected, so an older configuration keeps working.
+MAX_ROTATE_AT_PERCENT = 95.0
+# Preparation always begins this many percentage points before the switch.
+PREPARATION_OFFSET = 3.0
+
+
+def clamp_threshold(value: float) -> float:
+    return max(1.0, min(float(value), MAX_ROTATE_AT_PERCENT))
+
+
+def preparation_percent(value: float) -> float:
+    return max(0.0, clamp_threshold(value) - PREPARATION_OFFSET)
+
+
+def update_threshold(percent: float) -> dict:
+    """Persist a new switch threshold, clamped to the maximum."""
+    if not isinstance(percent, (int, float)):
+        raise ValueError("percent must be a number")
+    if not 0 < float(percent) <= 100:
+        raise ValueError("percent must be > 0 and <= 100")
+    applied = clamp_threshold(float(percent))
+    config = _read_json(CONFIG_PATH) if CONFIG_PATH.exists() else {}
+    if not isinstance(config, dict):
+        raise ValueError("account pool config is not a JSON object")
+    config["rotate_at_percent"] = applied
+    temporary = CONFIG_PATH.with_suffix(".json.omni-route-tmp")
+    temporary.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    temporary.replace(CONFIG_PATH)
+    return collect_status()
+
 HOME = Path.home()
 CONFIG_PATH = HOME / ".omnigent" / "codex-account-pool.json"
 STATE_PATH = HOME / ".omnigent" / "codex-account-pool-state.json"
@@ -278,7 +310,9 @@ def collect_status() -> dict[str, Any]:
         "router": {
             "configured": bool(accounts),
             "enabled": bool(config.get("enabled", True)) and bool(accounts),
-            "threshold": config.get("rotate_at_percent", 99),
+            "threshold": clamp_threshold(config.get("rotate_at_percent", 90)),
+            "preparationThreshold": preparation_percent(config.get("rotate_at_percent", 90)),
+            "maxThreshold": MAX_ROTATE_AT_PERCENT,
             "currentAccount": current,
             "accountCount": len(accounts),
             "providerCounts": {provider: sum(account["provider"] == provider for account in accounts) for provider in ("codex", "claude")},
@@ -413,7 +447,7 @@ class StatusHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path != "/api/route/order":
+        if path not in {"/api/route/order", "/api/threshold"}:
             body = b"method not allowed\n"
             self._headers("text/plain; charset=utf-8", len(body), 405)
             self.wfile.write(body)
@@ -425,10 +459,13 @@ class StatusHandler(BaseHTTPRequestHandler):
             return
         try:
             request = self._json_body()
-            names = request.get("accounts")
-            if not isinstance(names, list) or not all(isinstance(name, str) and name for name in names):
-                raise ValueError("accounts must be a list of account names")
-            payload = {"ok": True, "status": update_route_order(names)}
+            if path == "/api/threshold":
+                payload = {"ok": True, "status": update_threshold(request.get("percent"))}
+            else:
+                names = request.get("accounts")
+                if not isinstance(names, list) or not all(isinstance(name, str) and name for name in names):
+                    raise ValueError("accounts must be a list of account names")
+                payload = {"ok": True, "status": update_route_order(names)}
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
             self._headers("application/json; charset=utf-8", len(body), 200)
         except (ValueError, json.JSONDecodeError) as exc:
