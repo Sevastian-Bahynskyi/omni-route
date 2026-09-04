@@ -63,6 +63,17 @@ class ClaudeIntegrationTests(unittest.TestCase):
             result = self.bridge.read_hook_events_from_offset(root, 0, start_event_count=0)
             self.assertEqual(result.records[0].account_error, "rate_limit")
 
+    def test_wrapped_claude_draft_is_detected_across_composer_rows(self) -> None:
+        pane = """assistant output
+─────────────────────────────────────────
+❯ How would you continue from this
+  point?
+─────────────────────────────────────────
+  status
+"""
+        self.assertTrue(self.bridge._draft_in_input_box(pane, "How would you continue f"))
+        self.assertFalse(self.bridge._draft_in_input_box(pane, "different draft"))
+
     def test_environment_and_history_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory)):
             root = Path(directory)

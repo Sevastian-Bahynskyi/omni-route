@@ -166,6 +166,55 @@ def patch_claude_bridge(path: Path) -> None:
                         '    event_name: str | None\n    account_error: str | None = None\n    recorded_at:', "Claude hook structured error field")
     text = replace_once(text, '    return ClaudeHookRecord(\n',
                         '    return ClaudeHookRecord(\n        account_error=(payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), str) else None),\n', "parse Claude hook structured error")
+    old_draft_match = '''    glyph_lines = [line for line in pane.splitlines() if _CLAUDE_PROMPT_GLYPH in line]
+    if not glyph_lines:
+        return False
+    tail = glyph_lines[-1].rsplit(_CLAUDE_PROMPT_GLYPH, 1)[1]
+    if _PASTED_PLACEHOLDER_PREFIX in tail:
+        return True
+    return bool(needle) and needle in tail
+'''
+    new_draft_match = '''    lines = pane.splitlines()
+    glyph_indexes = [index for index, line in enumerate(lines) if _CLAUDE_PROMPT_GLYPH in line]
+    if not glyph_indexes:
+        return False
+    start = glyph_indexes[-1]
+    composer_lines = [lines[start].rsplit(_CLAUDE_PROMPT_GLYPH, 1)[1]]
+    for line in lines[start + 1 :]:
+        if _is_box_rule(line):
+            break
+        composer_lines.append(line.strip())
+    tail = " ".join(part.strip() for part in composer_lines if part.strip())
+    if _PASTED_PLACEHOLDER_PREFIX in tail:
+        return True
+    return bool(needle) and needle in tail
+'''
+    text = replace_once(
+        text,
+        old_draft_match,
+        new_draft_match,
+        "recognize wrapped Claude input drafts",
+    )
+    old_timeout = '''        raise RuntimeError(
+            f"The pasted draft was never visible in Claude Code's input box after "
+            f"{_PASTE_COMMIT_TIMEOUT_S}s (needle={needle!r}). The TUI may still be "
+            "consuming the paste — the message was not submitted. Retry the send."
+        )
+'''
+    new_timeout = '''        _run_tmux(info["socket_path"], "send-keys", "-t", info["tmux_target"], "C-a")
+        _run_tmux(info["socket_path"], "send-keys", "-t", info["tmux_target"], "C-k")
+        raise RuntimeError(
+            f"The pasted draft was never visible in Claude Code's input box after "
+            f"{_PASTE_COMMIT_TIMEOUT_S}s (needle={needle!r}). The unsent draft was "
+            "cleared; retry the send."
+        )
+'''
+    text = replace_once(
+        text,
+        old_timeout,
+        new_timeout,
+        "clear unverified Claude drafts",
+    )
     path.write_text(text, encoding="utf-8")
 
 

@@ -184,6 +184,7 @@ def test_wiring(rep: Reporter) -> None:
         (SRC / "omnigent" / "codex_account_rotation.py", "switch-agent", "Claude handoff path"),
         (SRC / "omnigent" / "claude_account_integration.py", "trust_account_workspace", "isolated Claude workspace trust"),
         (SRC / "omnigent" / "claude_account_integration.py", "sync_shared_skills", "shared Claude skills"),
+        (SRC / "omnigent" / "claude_native_bridge.py", "composer_lines", "wrapped Claude draft delivery"),
         (SRC / "omnigent" / "server" / "ws_origin.py", "omni-route-trusted-origins.json", "remote trusted origin"),
     ]
     for path, needle, label in checks:
