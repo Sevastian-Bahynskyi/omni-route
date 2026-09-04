@@ -12,6 +12,7 @@ CONFIG = Path("~/.omnigent/codex-account-pool.json").expanduser()
 STATE = Path("~/.omnigent/codex-account-pool-state.json").expanduser()
 ROOT = Path("~/.omnigent/codex-accounts").expanduser()
 CLAUDE_ROOT = Path("~/.omnigent/claude-accounts").expanduser()
+SHARED_SKILLS = Path("~/.agents/skills").expanduser()
 
 
 def _read_config() -> dict[str, object]:
@@ -63,6 +64,28 @@ def _save(accounts: list[dict[str, object]]) -> None:
     tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o600)
     os.replace(tmp, CONFIG)
+    _sync_claude_skills(accounts)
+
+
+def _sync_claude_skills(accounts: list[dict[str, object]]) -> None:
+    if not SHARED_SKILLS.is_dir():
+        return
+    skills = [path for path in SHARED_SKILLS.iterdir() if path.is_dir() and (path / "SKILL.md").is_file()]
+    for account in accounts:
+        if account.get("provider") != "claude" or account.get("use_default_config") is True:
+            continue
+        raw_config_dir = account.get("config_dir")
+        if not isinstance(raw_config_dir, str) or not raw_config_dir:
+            continue
+        destination = Path(raw_config_dir).expanduser() / "skills"
+        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for skill in skills:
+            target = destination / skill.name
+            if target.is_symlink() and target.resolve() == skill.resolve():
+                continue
+            if target.exists() or target.is_symlink():
+                continue
+            target.symlink_to(skill, target_is_directory=True)
 
 
 def _next_name(accounts: list[dict[str, object]], provider: str) -> str:

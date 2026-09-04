@@ -66,6 +66,9 @@ class ClaudeIntegrationTests(unittest.TestCase):
     def test_environment_and_history_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory)):
             root = Path(directory)
+            shared_skill = root / ".agents/skills/implement"
+            shared_skill.mkdir(parents=True)
+            (shared_skill / "SKILL.md").write_text("---\nname: implement\n---\n")
             profile = self.pool.AccountProfile("claude-1", None, "claude", root / "account")
             env, unset = self.integration.prepare_account_environment(profile, {
                 "ANTHROPIC_PROFILE": "wrong", "ANTHROPIC_API_KEY": "wrong",
@@ -75,6 +78,7 @@ class ClaudeIntegrationTests(unittest.TestCase):
             self.assertIn("ANTHROPIC_PROFILE", unset)
             self.assertNotIn("CLAUDE_CONFIG_DIR", unset)
             self.assertEqual((root / "account/projects").resolve(), (root / ".claude/projects").resolve())
+            self.assertEqual((root / "account/skills/implement").resolve(), shared_skill.resolve())
             account_config = json.loads((root / "account/.claude.json").read_text())
             self.assertTrue(account_config["hasCompletedOnboarding"])
             self.assertTrue(

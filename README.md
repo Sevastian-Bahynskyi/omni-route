@@ -34,7 +34,9 @@ Codex uses isolated `CODEX_HOME` credentials. Claude uses isolated
 documented in [Claude Code authentication](https://code.claude.com/docs/en/authentication).
 When a Claude session starts, Omni Route records workspace trust inside the
 selected account profile so Claude Code cannot strand the session on its
-interactive trust prompt.
+interactive trust prompt. It also links the shared `~/.agents/skills` catalog
+into every isolated Claude profile, making workflow commands such as
+`/implement` available under each subscription account.
 Use a current Claude Code release. Normal CLI logins remain unchanged.
 
 ## Commands

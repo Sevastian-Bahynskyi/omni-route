@@ -16,7 +16,7 @@ class SetupTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        for key, path in {"CONFIG": self.root / "pool.json", "STATE": self.root / "state.json", "ROOT": self.root / "codex", "CLAUDE_ROOT": self.root / "claude"}.items():
+        for key, path in {"CONFIG": self.root / "pool.json", "STATE": self.root / "state.json", "ROOT": self.root / "codex", "CLAUDE_ROOT": self.root / "claude", "SHARED_SKILLS": self.root / "shared-skills"}.items():
             patcher = patch.object(setup, key, path)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -51,6 +51,14 @@ class SetupTests(unittest.TestCase):
         for _, env in calls:
             self.assertNotIn("ANTHROPIC_API_KEY", env)
             self.assertNotIn("CLAUDE_SECURESTORAGE_CONFIG_DIR", env)
+
+    def test_save_syncs_shared_skills_to_every_isolated_claude_profile(self) -> None:
+        skill = setup.SHARED_SKILLS / "implement"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: implement\n---\n")
+        account_home = self.root / "claude/claude-1"
+        setup._save([{"name": "claude-1", "provider": "claude", "config_dir": str(account_home)}])
+        self.assertEqual((account_home / "skills/implement").resolve(), skill.resolve())
 
     def test_claude_only_setup_can_finish(self) -> None:
         setup.CONFIG.write_text(json.dumps({"accounts": [{"name": "claude-1", "provider": "claude", "config_dir": "/private/profile"}]}))

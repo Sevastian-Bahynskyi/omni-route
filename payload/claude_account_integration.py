@@ -30,6 +30,7 @@ def prepare_account_environment(
     if not profile.use_default_config:
         config_dir = profile.config_dir
         config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        sync_shared_skills(config_dir)
         if workspace is not None:
             trust_account_workspace(config_dir, workspace)
         projects = Path.home() / ".claude" / "projects"
@@ -52,6 +53,23 @@ def prepare_account_environment(
         env["CLAUDE_CONFIG_DIR"] = str(config_dir)
         unset.remove("CLAUDE_CONFIG_DIR")
     return env, unset
+
+
+def sync_shared_skills(config_dir: Path) -> None:
+    source = Path.home() / ".agents" / "skills"
+    if not source.is_dir():
+        return
+    destination = config_dir / "skills"
+    destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for skill in source.iterdir():
+        if not skill.is_dir() or not (skill / "SKILL.md").is_file():
+            continue
+        target = destination / skill.name
+        if target.is_symlink() and target.resolve() == skill.resolve():
+            continue
+        if target.exists() or target.is_symlink():
+            continue
+        target.symlink_to(skill, target_is_directory=True)
 
 
 def trust_account_workspace(config_dir: Path, workspace: Path) -> None:
