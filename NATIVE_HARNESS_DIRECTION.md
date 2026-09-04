@@ -1,194 +1,149 @@
-# Native Harness Direction
+# Native Harness Implementation Plan
 
-## Why this branch exists
+## Goal
 
-Omni Route was originally built around Omnigent because Omnigent gave us a shared session layer, a mobile/browser client, and a place to coordinate Codex and Claude while rotating subscription accounts.
+Remove Omnigent from the execution path and keep Codex and Claude fully native.
 
-That tradeoff is becoming less attractive.
+Omni Route should become only a small supervisor around the native desktop applications. It manages accounts, quota state, switching, app restart/recovery, and the routing dashboard. It must not replace the native conversation UI, skills, plugins, browser/computer use, remote control, or other provider features.
 
-Both Codex and Claude now have increasingly capable native harnesses. Those native products are where provider-specific features arrive first: native skills, plugins, MCP integrations, browser/computer interaction, approvals, terminal workflows, desktop integrations, mobile/remote control, and other features that are difficult for a third-party harness to reproduce without lagging behind.
+## Fixed product decisions
 
-The problem is that our current architecture can make Omnigent the center of the experience instead of Codex and Claude themselves. If that means losing or weakening native capabilities, then Omnigent becomes an unnecessary layer rather than an advantage.
+- Use native Codex Desktop for Codex.
+- Use native Claude Desktop / Claude Code for Claude.
+- Reuse the existing Omni Route account pool, account priority, cooldown and rotation logic where it still applies.
+- Same-provider rotation preserves the exact native session.
+- Cross-provider rotation uses a short structured handoff.
+- Native provider remote/mobile functionality remains the normal way to control active Codex/Claude work remotely.
+- Omni Route may keep a small Tailscale dashboard for routing/account control only.
+- Do not manipulate or copy whole provider profile directories. Only the minimum native session state needed to reopen the exact session may be moved if account isolation requires it.
 
-This branch documents the product direction we want to explore. It is intentionally not an implementation plan.
+## Runtime model
 
-## What we want to achieve
+`omni-route start` starts the small Omni Route supervisor and launches/attaches to the selected native provider.
 
-The long-term goal is:
+The supervisor exists only to survive account/provider transitions and native app restarts. It does not own the AI session.
 
-> Keep Codex and Claude as full native harnesses, while Omni Route becomes a thin supervisor responsible only for subscription routing, account rotation, continuity, status, and remote account control.
+When no Omni Route-controlled work remains active, the supervisor should stop. The dashboard may remain separately available if we choose to keep it always-on.
 
-A user should feel like they are using real Codex when they choose Codex, and real Claude when they choose Claude.
+## Threshold behavior
 
-Omni Route should not try to become its own coding harness.
+The switch threshold must be configurable from the Omni Route dashboard.
 
-## Native Codex must remain native
+- User can select/change the switch threshold in the dashboard.
+- Maximum allowed switch threshold: **95%**.
+- Preparation threshold is always `switch threshold - 3 percentage points`.
+- Example: switch at 95%, preparation starts at 92%.
 
-When working with Codex, we want the user to retain the normal Codex experience and whatever capabilities OpenAI provides natively.
+Behavior:
 
-That includes, where available:
+- Below preparation threshold: work normally.
+- Preparation range: avoid starting obviously long new work and finish the current safe unit where possible.
+- At switch threshold: perform rotation.
+- If a hard quota limit happens earlier: recover and rotate immediately using the available state.
 
-- native Codex UI and workflow;
-- native skills and commands;
-- native plugins and MCP integrations;
-- native browser/computer capabilities;
-- native approvals, diffs, tests, terminals and repository interaction;
-- native desktop and remote/mobile functionality;
-- new Codex features without waiting for Omni Route or another harness to reimplement them.
+## Same-provider rotation
 
-Omni Route should not replace these features with equivalents of its own.
+The native session is the anchor.
 
-## Native Claude must remain native
-
-The same applies to Claude.
-
-When working with Claude, we want the actual Claude Code / Claude native experience, including its native skills, agents, hooks, plugins, MCP integrations, terminal workflow, remote-control capabilities and any provider-specific desktop/browser/computer functionality Anthropic exposes.
-
-Again, Omni Route should not become the layer that defines what Claude can or cannot do.
-
-## What Omni Route should own
-
-Omni Route should focus on the capabilities that neither native harness solves well for our use case.
-
-Those are primarily:
-
-- maintaining multiple independent Codex subscription accounts;
-- maintaining multiple independent Claude subscription accounts;
-- keeping a user-defined priority/order across those accounts;
-- detecting when the current account can no longer continue because of subscription limits;
-- automatically moving work to the next usable account;
-- allowing manual account/provider switching when desired;
-- showing account state, current account, cooldown/reset information and routing order;
-- preserving enough continuity that a long-running development task can continue without the user repeatedly explaining the same work;
-- providing a small remote control surface for routing/account management.
-
-The product should be valuable even if Omnigent disappears entirely.
-
-## What Omni Route should not own
-
-Omni Route should not aim to own:
-
-- the primary coding conversation UI;
-- the canonical skill system;
-- the browser or computer-use implementation;
-- provider-specific plugins;
-- the terminal or code-review experience;
-- provider-specific agent features;
-- a replacement implementation of Codex or Claude functionality.
-
-Whenever possible, those capabilities should remain the responsibility of the native harness.
-
-## Same-provider account rotation
-
-The desired experience for account rotation within one provider is straightforward from a product perspective.
-
-For example:
+Example:
 
 ```text
-Codex account A
-    -> subscription limit reached
-Codex account B
-    -> continue the same development task
+Codex account A + native session 123
+-> threshold reached
+-> select Codex account B
+-> make native session 123 available to B if required
+-> restart Codex Desktop
+-> reopen/resume native session 123
+-> verify account B and session 123
+-> continue
 ```
 
-and:
+Claude follows the same product behavior.
 
-```text
-Claude account A
-    -> subscription limit reached
-Claude account B
-    -> continue the same development task
-```
+Required behavior:
 
-The user should not need to start over, manually recreate context, or reconstruct what the agent was doing.
+1. Remember the exact native session and workspace before switching.
+2. Finish/stop the current work at a safe point.
+3. Select the next account using the existing rotation rules.
+4. Preserve or expose only the exact native session state needed by the new account.
+5. Restart the native desktop application.
+6. Reopen/resume the exact same native session.
+7. Verify that both the expected account and expected session loaded.
+8. Only then mark the rotation successful and continue.
 
-How this continuity is achieved should be proven against the native products rather than assumed here.
+If the expected account or session does not load, stop in a visible recovery/error state. Never silently continue on the wrong account or a new empty session.
 
-## Cross-provider switching
+## Cross-provider rotation
 
-Cross-provider switching is different.
+Codex and Claude native sessions are not treated as portable between providers.
 
-There is no requirement that a Codex conversation and a Claude conversation must literally be the same native conversation object.
+Before Codex -> Claude or Claude -> Codex, the current agent creates a short handoff containing only:
 
-The actual product requirement is:
+- current task/goal;
+- current progress;
+- important decisions;
+- changed/relevant files;
+- test/status information;
+- blockers;
+- exact next action.
 
-> If Codex can no longer continue, Claude should be able to pick up the same development task with enough context to continue effectively, and vice versa.
+Omni Route also preserves the same workspace/repository state.
 
-The repository, current workspace, Git state, changed files, task objective, important decisions, completed work, test state and remaining work are more important than preserving a provider-independent transcript for its own sake.
+The other native provider starts in that workspace, reads the newest handoff, verifies the repository/Git state itself, and continues the task.
 
-We should prefer a reliable handoff between native harnesses over forcing both providers into a shared third-party conversation abstraction if that abstraction reduces native functionality.
+The handoff should stay concise. The repository and Git state remain the source of truth.
 
-## Remote access
+## Failure and edge-case rules
 
-Removing Omnigent must not mean losing remote usability.
+- Never intentionally kill the native app in the middle of an unsafe file/tool operation if a clean boundary is available.
+- Rotation must be serialized. Manual and automatic switches must not race each other.
+- Persist cooldown/reset state so restart loops cannot bounce back to an exhausted account.
+- If all accounts are unavailable, stop and show the reset/login state instead of looping.
+- If login/approval is required, stop in a clear `needs user action` state.
+- Native browser/computer state is not assumed to transfer across providers.
+- A native mobile/remote client may temporarily disconnect during app restart; successful recovery means the native session is usable again afterward.
+- Multiple projects/sessions must not overwrite each other's active session identity or recovery state.
 
-The desired remote model is:
+## Dashboard
 
-- the Mac remains the execution host;
-- Codex should use the best native remote/mobile mechanism OpenAI provides;
-- Claude should use the best native remote/mobile mechanism Anthropic provides;
-- Omni Route should provide only the remote surface needed to inspect and control account routing;
-- remote access to Omni Route itself should stay secure and private rather than exposing local services directly to the public internet.
+Keep the useful account-routing controls, but the dashboard must no longer behave like an AI client.
 
-A unified mobile conversation UI across Codex and Claude is useful, but it is not worth sacrificing the full native harnesses if provider-native remote clients already solve most of the interaction problem.
+It should show/control at least:
 
-## What may be lost by removing Omnigent
+- account route/order;
+- active provider/account;
+- usage/cooldown/reset state;
+- configurable switch threshold (max 95%);
+- derived preparation threshold;
+- current rotation/recovery status;
+- manual account/provider switch;
+- clear errors or required user action.
 
-Omnigent currently gives us some real benefits that must be consciously evaluated rather than dismissed:
+## Implementation order
 
-- one provider-independent logical session;
-- one transcript visible from one client;
-- one shared server that survives provider changes;
-- one mobile/browser surface for both providers;
-- a convenient place to coordinate cross-provider switching.
+1. **Grill first.** Run one `/grill-me` pass before implementation, maximum 5 questions, focused only on unresolved product decisions. Do not start implementation until the answers are recorded.
+2. **Prove same-provider native reload.** Verify Codex A -> Codex B and Claude A -> Claude B with exact native-session continuation and account verification.
+3. **Build the minimal supervisor lifecycle.** Start, monitor, rotate, restart, verify, resume, stop.
+4. **Move threshold control into the dashboard.** Enforce max 95% and automatic preparation threshold = switch threshold - 3%.
+5. **Add cross-provider handoff.** Codex <-> Claude using the concise structured handoff and the same workspace.
+6. **Validate remote behavior.** Native Codex/Claude remote control should remain usable after recovery/restart.
+7. **Only then remove Omnigent dependencies.** Do not delete the current working path until the native-first path passes the required flows.
 
-The question is not whether these features are useful. They are.
+## Acceptance criteria
 
-The question is whether they are valuable enough to justify putting another harness between the user and Codex/Claude, especially if doing so restricts native features or creates ongoing compatibility work.
+The native-first rewrite is ready only when:
 
-## Success criteria for a native-first Omni Route
+1. Codex uses the full native Codex desktop experience.
+2. Claude uses the full native Claude experience.
+3. Codex account rotation restarts and resumes the exact native Codex session automatically.
+4. Claude account rotation restarts and resumes the exact native Claude session automatically.
+5. The dashboard threshold is user-configurable and cannot exceed 95%.
+6. Preparation mode starts automatically 3 percentage points before the configured threshold.
+7. Codex <-> Claude can continue the same task through a concise handoff without the user restating it.
+8. Wrong-account, missing-session, exhausted-pool and login-required cases fail visibly instead of silently.
+9. Native skills, browser/computer use, plugins and remote control are not replaced by Omni Route.
+10. Omnigent can be removed without losing account rotation, continuity or routing control.
 
-A future native-first design should be considered successful if:
+## Core rule
 
-1. Using Codex through Omni Route feels materially the same as using native Codex directly.
-2. Using Claude through Omni Route feels materially the same as using native Claude directly.
-3. Native provider features remain available without Omni Route needing to recreate them.
-4. Multiple subscription accounts can still be configured and ordered.
-5. Account exhaustion can still result in automatic continuation on another account.
-6. Switching providers does not force the user to manually restate the task.
-7. Remote use remains practical when the Mac is left running.
-8. Omni Route becomes smaller and easier to maintain rather than becoming another general-purpose agent platform.
-
-## Questions that must be answered before removing Omnigent
-
-These are validation questions, not implementation assumptions:
-
-- Can a native Codex session continue cleanly after changing to another isolated Codex subscription account?
-- Can a native Claude session continue cleanly after changing to another isolated Claude subscription account?
-- What happens to each provider's native remote/mobile connection when the active subscription account changes?
-- What minimum handoff information is required for a reliable Codex-to-Claude or Claude-to-Codex continuation?
-- Which useful Omnigent behaviors would genuinely have to be rebuilt, and which are already better handled by the native providers?
-
-These questions should be answered experimentally before committing to a rewrite.
-
-## Direction
-
-The preferred direction to investigate is therefore:
-
-```text
-Native Codex        Native Claude
-      \                /
-       \              /
-        Omni Route supervisor
-
-        account pool
-        quota state
-        automatic rotation
-        provider handoff
-        routing dashboard
-        remote account control
-```
-
-Omni Route should become infrastructure around the native harnesses, not the harness through which the user experiences them.
-
-This branch exists to evaluate that direction before changing the current working system.
+**Same provider: preserve the exact native session. Different provider: preserve the task through a short handoff. Omni Route only manages lifecycle and accounts.**
