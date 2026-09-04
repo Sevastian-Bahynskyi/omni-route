@@ -104,12 +104,12 @@ def test_install_and_remove() -> None:
         assert again["record"]["createdAt"] == record["createdAt"]
         data = json.loads(Path(result["store"]).read_text(encoding="utf-8"))
         ids = [t["id"] for t in data["scheduledTasks"]]
-        assert ids.count(ns.TASK_ID) == 1, "must not duplicate the task"
+        assert ids.count(ns.task_id_for(ws)) == 1, "must not duplicate the task"
 
-        assert ns.remove(udd) is True
+        assert ns.remove(udd, workspace=ws) is True
         data = json.loads(Path(result["store"]).read_text(encoding="utf-8"))
-        assert all(t["id"] != ns.TASK_ID for t in data["scheduledTasks"])
-        assert ns.remove(udd) is False, "removing twice is a no-op"
+        assert all(t["id"] != ns.task_id_for(ws) for t in data["scheduledTasks"])
+        assert ns.remove(udd, workspace=ws) is False, "removing twice is a no-op"
     print("  ok test_install_and_remove")
 
 
@@ -147,7 +147,7 @@ def test_dry_run_touches_nothing() -> None:
         result = ns.install(udd, ws, claude_config_dir=cfg, dry_run=True)
         assert "would be" in result["action"]
         assert ns.find_store(udd).path.read_text(encoding="utf-8") == before
-        assert not ns.skill_path(claude_config_dir=cfg).exists()
+        assert not ns.skill_path(ns.task_id_for(ws), claude_config_dir=cfg).exists()
     print("  ok test_dry_run_touches_nothing")
 
 
@@ -175,6 +175,8 @@ def main() -> int:
         test_stop_hook_fires_once_per_generation,
         test_stop_hook_prepare_phase_differs,
         test_stop_hook_fails_open_on_garbage,
+        test_task_id_is_unique_per_workspace,
+        test_claude_account_uuid_matches_cli_profile,
     ]
     print(f"running {len(tests)} tests")
     for test in tests:
@@ -247,6 +249,66 @@ def test_stop_hook_fails_open_on_garbage() -> None:
             code, _ = _run_hook(ws)
             assert code == 0, f"must fail open for {bad!r}"
     print("  ok test_stop_hook_fails_open_on_garbage")
+
+def test_task_id_is_unique_per_workspace() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        udd = _fake_user_data_dir(base / "udd")
+        cfg = base / "cfg"
+        ws_a = _git_workspace(base / "a")
+        ws_b = _git_workspace(base / "b")
+
+        assert ns.task_id_for(ws_a) != ns.task_id_for(ws_b)
+
+        a = ns.install(udd, ws_a, claude_config_dir=cfg)
+        b = ns.install(udd, ws_b, claude_config_dir=cfg)
+        assert a["record"]["filePath"] != b["record"]["filePath"], (
+            "two workspaces must not share one SKILL.md"
+        )
+        assert a["record"]["cwd"] != b["record"]["cwd"]
+
+        data = json.loads(Path(a["store"]).read_text(encoding="utf-8"))
+        ids = {t["id"] for t in data["scheduledTasks"]}
+        assert ns.task_id_for(ws_a) in ids and ns.task_id_for(ws_b) in ids, (
+            "both workspaces must coexist in one account store"
+        )
+
+        # Each prompt points at its own workspace.
+        for ws, result in ((ws_a, a), (ws_b, b)):
+            text = Path(result["record"]["filePath"]).read_text(encoding="utf-8")
+            assert str(ws.resolve()) in text
+    print("  ok test_task_id_is_unique_per_workspace")
+
+
+def test_claude_account_uuid_matches_cli_profile() -> None:
+    """Desktop's account uuid equals the CLI profile's oauthAccount uuid.
+
+    This is how rotation verifies the right Claude account actually loaded,
+    without a GUI or a network call.
+    """
+    pairs = [
+        (Path.home() / ".omnigent/claude-desktop/claude-3",
+         Path.home() / ".omnigent/claude-accounts/claude-3"),
+    ]
+    checked = 0
+    for user_data_dir, config_dir in pairs:
+        if not user_data_dir.is_dir() or not (config_dir / ".claude.json").exists():
+            continue
+        try:
+            store = ns.find_store(user_data_dir)
+        except ns.SchedulerError:
+            continue
+        cli = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))
+        expected = (cli.get("oauthAccount") or {}).get("accountUuid")
+        assert expected == store.account_uuid, (
+            f"desktop {store.account_uuid} != cli {expected}"
+        )
+        checked += 1
+    if checked:
+        print(f"  ok test_claude_account_uuid_matches_cli_profile ({checked} profile)")
+    else:
+        print("  skip test_claude_account_uuid_matches_cli_profile (no profile yet)")
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

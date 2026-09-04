@@ -324,6 +324,47 @@ The writer must validate the file's shape before touching it, back it up, and
 degrade to a visible `needs user action` ("create the automation manually")
 rather than corrupting the file if the schema stops matching.
 
+### Gate 2 (completed) — Claude account isolation verified end to end
+
+With a second account signed into its own profile, isolation is confirmed:
+
+| profile | user-data-dir | account | account uuid |
+| --- | --- | --- | --- |
+| default | `~/Library/Application Support/Claude` | `couplegoai.main@…` (claude-1) | `1c7a389f-…` |
+| claude-3 | `~/.omnigent/claude-desktop/claude-3` | `support@couplegoai.com` | `820bf123-…` |
+
+The freshly created profile opened **signed out** and had to be signed in
+separately, and the two profiles report different account uuids. `--user-data-dir`
+is therefore a real account boundary.
+
+**Verification mechanism for Claude (completes §7).** The Desktop account uuid is
+byte-identical to the CLI profile's `oauthAccount.accountUuid` in
+`<CLAUDE_CONFIG_DIR>/.claude.json`. Rotation can therefore verify that the
+expected Claude account loaded by comparing two local files — no GUI reading and
+no network call, matching the Codex check that reads `auth.json`'s `id_token`
+claims.
+
+**Launching requires `open -n`, not a backgrounded binary.** A `nohup … &` launch
+from a non-interactive shell dies with that shell; it created the profile
+directory and exited, leaving the *default* profile running, which is
+indistinguishable from an isolation failure unless the launcher checks. Omni
+Route launches through `open -n` (handing the process to launchd) and then
+asserts a process is running with the expected `--user-data-dir` before treating
+the launch as successful.
+
+**Two collisions the automation writer must avoid**, both found by dry-running
+against the two real profiles:
+
+- *Across workspaces:* the task id embeds a hash of the resolved workspace path.
+  Without it, two projects share one `SKILL.md` and overwrite each other's
+  prompt, since the prompt embeds the workspace.
+- *Across accounts:* the supervisor must set `CLAUDE_CONFIG_DIR` per account, so
+  each account's `SKILL.md` lives under its own profile rather than in the
+  shared `~/.claude`.
+
+The prompt embeds the **resolved** workspace path, so the marker path the agent
+checks is exactly the one the supervisor writes.
+
 ### Gate 6 — not yet run
 
 Full unattended loop: Codex A -> Codex B, Claude A -> Claude B.

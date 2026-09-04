@@ -18,6 +18,7 @@ the rotation sequence already guarantees that.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import time
@@ -25,10 +26,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-TASK_ID = "omni-route-rotation"
+TASK_PREFIX = "omni-route-rotation"
 ROTATION_CRON = "*/5 * * * *"
 SESSIONS_DIRNAME = "claude-code-sessions"
 STORE_NAME = "scheduled-tasks.json"
+
+
+def task_id_for(workspace: Path) -> str:
+    """A task id unique to one workspace.
+
+    The automation is identified by (account, workspace): the record lives in
+    the account's store, but `cwd` and the prompt are per workspace. Without the
+    workspace in the id, two projects would share one SKILL.md and overwrite
+    each other's prompt.
+    """
+    resolved = str(Path(workspace).resolve())
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:8]
+    return f"{TASK_PREFIX}-{digest}"
 
 
 class SchedulerError(RuntimeError):
@@ -43,8 +57,11 @@ class TaskStore:
 
 def rotation_prompt(workspace: Path) -> str:
     """The self-gating prompt. Harmless when there is nothing to do."""
-    marker = Path(workspace) / ".omni-route" / "handoff-pending"
-    latest = Path(workspace) / ".omni-route" / "handoff-latest.md"
+    # Resolve so the path in the prompt matches the record's cwd exactly; the
+    # agent must look for the marker where the supervisor writes it.
+    root = Path(workspace).resolve()
+    marker = root / ".omni-route" / "handoff-pending"
+    latest = root / ".omni-route" / "handoff-latest.md"
     return f"""First, check whether `{marker}` exists.
 
 If it does NOT exist, stop immediately and reply with exactly: no pending handoff.
@@ -67,14 +84,14 @@ def config_dir(explicit: Path | None = None) -> Path:
     return Path(explicit) if explicit else Path.home() / ".claude"
 
 
-def skill_path(task_id: str = TASK_ID, *, claude_config_dir: Path | None = None) -> Path:
+def skill_path(task_id: str, *, claude_config_dir: Path | None = None) -> Path:
     return config_dir(claude_config_dir) / "scheduled-tasks" / task_id / "SKILL.md"
 
 
 def write_skill(
     prompt: str,
     *,
-    task_id: str = TASK_ID,
+    task_id: str,
     description: str = "Omni Route rotation continuation",
     claude_config_dir: Path | None = None,
 ) -> Path:
@@ -166,11 +183,12 @@ def install(
     *,
     account_uuid: str | None = None,
     claude_config_dir: Path | None = None,
-    task_id: str = TASK_ID,
+    task_id: str | None = None,
     cron: str | None = ROTATION_CRON,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Install or update the rotation automation. Returns a result summary."""
+    task_id = task_id or task_id_for(workspace)
     store = find_store(Path(user_data_dir), account_uuid)
     data = load_store(store)
     skill_file = write_skill(
@@ -211,8 +229,16 @@ def install(
 
 
 def remove(
-    user_data_dir: Path, *, account_uuid: str | None = None, task_id: str = TASK_ID
+    user_data_dir: Path,
+    *,
+    account_uuid: str | None = None,
+    task_id: str | None = None,
+    workspace: Path | None = None,
 ) -> bool:
+    if task_id is None:
+        if workspace is None:
+            raise SchedulerError("remove() needs either task_id or workspace")
+        task_id = task_id_for(workspace)
     store = find_store(Path(user_data_dir), account_uuid)
     data = load_store(store)
     tasks = data["scheduledTasks"]
