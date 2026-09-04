@@ -429,3 +429,58 @@ Needs the supervisor.
 - ChatGPT.app **blocks UI self-automation**, so any plan that depends on driving
   its interface is unsafe. This reinforces the decision not to use UI automation
   for rotation.
+
+---
+
+## Corrections found while building the supervisor
+
+### The Claude account model has two halves
+
+Gate 2 concluded that `CLAUDE_CONFIG_DIR` cannot isolate a Claude account. That
+is true of the **app login** and false of the **session account**:
+
+* The Electron `--user-data-dir` holds the web login. A new profile starts
+  signed out and must be signed in once.
+* **`CLAUDE_CONFIG_DIR` decides which account a Claude Code session runs as**,
+  and therefore whose quota the work consumes.
+
+Both are required, and they must agree. Launching a profile whose user-data-dir
+is signed in as one account while pointing `CLAUDE_CONFIG_DIR` at another runs
+sessions as the config-dir account, which is how the default profile ended up
+holding session state for two different accounts.
+
+### `claude-code-sessions/<uuid>` is history, not identity
+
+A profile keeps a directory for every account it has ever run as. Reading "the
+account" from it -- even the most recently modified one -- accepts a stale
+answer. Verification is therefore split:
+
+* **Pre-flight:** the credential in `CLAUDE_CONFIG_DIR` must name the expected
+  account. This is the Claude analogue of reading Codex's `auth.json` claims,
+  and it is the only check available before anything has run.
+* **Post-launch:** the expected account's directory must be *touched after the
+  launch*. Presence proves nothing; recency proves the session came up as that
+  account.
+
+### The task store cannot be written while the app is running
+
+Claude Desktop holds its scheduled-task list in memory and writes it back, so a
+task installed while the app is running is silently discarded. This cost a live
+rotation attempt: the automation was written, the app overwrote it, and the
+incoming account had nothing to resume with.
+
+Two consequences, both now enforced:
+
+* `native_scheduler.install()` refuses to write a store the app currently owns.
+* Rotation stops **both** the outgoing and the incoming app before preparing the
+  incoming account. Stopping only the outgoing one is not enough -- the incoming
+  account's app is often already running, and Claude Desktop's default profile
+  usually is.
+
+### `per_task_limit`
+
+`recordedSkips` in the task store gives the real reason a run was skipped. The
+observed value, `per_task_limit`, is the app throttling how often a single task
+may re-run. It is expected behaviour rather than a fault, but it means a
+five-minute cron is a *ceiling* on how often the automation runs, not a
+guarantee, and the supervisor must not assume every tick produces a run.

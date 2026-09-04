@@ -238,12 +238,69 @@ def main() -> int:
         test_rotation_falls_back_to_headless_and_reports_degraded,
         test_rotation_needs_user_action_when_everything_fails,
         test_wait_for_resume_observes_the_marker,
+        test_confirm_requires_activity_after_launch,
+        test_preflight_checks_the_credential_not_the_profile_history,
     ]
     print(f"running {len(tests)} supervisor tests")
     for test in tests:
         test()
     print("all passed")
     return 0
+
+def test_confirm_requires_activity_after_launch() -> None:
+    """Presence of account state proves nothing; it must be touched after launch.
+
+    A desktop profile keeps a directory for every account it has ever run as, so
+    reading that directory as identity would accept a stale account.
+    """
+    import desktop
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        cfg = base / "cfg"
+        cfg.mkdir()
+        (cfg / ".claude.json").write_text(
+            json.dumps({"oauthAccount": {"accountUuid": "uuid-A"}}), encoding="utf-8"
+        )
+        udd = base / "udd"
+        stale = udd / "claude-code-sessions" / "uuid-A"
+        stale.mkdir(parents=True)
+
+        launch = time.time() + 5  # nothing has happened since this moment
+        ok, detail = desktop.confirm_claude_account(udd, cfg, since=launch)
+        assert ok is False and "not touched after launch" in detail
+
+        # Touching it after the launch is the proof.
+        stale.touch()
+        ok, detail = desktop.confirm_claude_account(udd, cfg, since=time.time() - 5)
+        assert ok is True and detail == "uuid-A"
+
+        # A different account never satisfies the check.
+        (cfg / ".claude.json").write_text(
+            json.dumps({"oauthAccount": {"accountUuid": "uuid-B"}}), encoding="utf-8"
+        )
+        ok, detail = desktop.confirm_claude_account(udd, cfg, since=time.time() - 5)
+        assert ok is False and "no session state for uuid-B" in detail
+    print("  ok test_confirm_requires_activity_after_launch")
+
+
+def test_preflight_checks_the_credential_not_the_profile_history() -> None:
+    import desktop
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        cfg = base / "cfg"; cfg.mkdir()
+        udd = base / "udd"; udd.mkdir()
+        ok, detail = desktop.verify_claude_account(udd, cfg)
+        assert ok is False, "a profile with no credential must not pass pre-flight"
+
+        (cfg / ".claude.json").write_text(
+            json.dumps({"oauthAccount": {"accountUuid": "uuid-A"}}), encoding="utf-8"
+        )
+        ok, detail = desktop.verify_claude_account(udd, cfg)
+        assert ok is True and detail == "uuid-A"
+
+        ok, detail = desktop.verify_claude_account(base / "missing", cfg)
+        assert ok is False and "signin" in detail
+    print("  ok test_preflight_checks_the_credential_not_the_profile_history")
 
 
 if __name__ == "__main__":

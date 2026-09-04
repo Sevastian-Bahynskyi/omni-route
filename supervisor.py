@@ -249,6 +249,18 @@ class Supervisor:
             desktop.claude_user_data_dir(profile), profile.config_dir or Path()
         )
 
+    def confirm_account(self, profile: AccountProfile, *, since: float) -> tuple[bool, str]:
+        """Confirm after launch that the app really came up on this account."""
+        if profile.provider == "codex":
+            identity = desktop.codex_identity(profile.auth_json) if profile.auth_json else None
+            if identity is None or not identity.known:
+                return False, "could not read the Codex account identity"
+            return True, identity.account or ""
+        return desktop.confirm_claude_account(
+            desktop.claude_user_data_dir(profile), profile.config_dir or Path(),
+            since=since,
+        )
+
     def start_provider(self, profile: AccountProfile) -> None:
         if profile.provider == "codex":
             desktop.launch_codex(self.workspace)
@@ -320,7 +332,12 @@ class Supervisor:
             events.append(f"selected {nxt.name}")
 
             self.stop_provider(current)
-            events.append("stopped previous app")
+            # The incoming account's app must be stopped as well. It may already
+            # be running -- Claude Desktop's default profile usually is -- and it
+            # holds its task store in memory, so an automation written while it
+            # runs is discarded when the app next saves.
+            self.stop_provider(nxt)
+            events.append("stopped previous and incoming apps")
 
             try:
                 self.prepare_account(nxt)
@@ -344,12 +361,18 @@ class Supervisor:
             events.append(f"pre-flight identity ok ({detail})")
 
             for attempt in range(1, RESTART_ATTEMPTS + 1):
+                launched_at = time.time()
                 try:
                     self.start_provider(nxt)
                 except desktop.DesktopError as exc:
                     events.append(f"launch attempt {attempt} failed: {exc}")
                     continue
                 events.append(f"launched {nxt.provider} (attempt {attempt})")
+                confirmed, confirm_detail = self.confirm_account(nxt, since=launched_at)
+                events.append(
+                    f"account confirmed ({confirm_detail})" if confirmed
+                    else f"account not yet confirmed: {confirm_detail}"
+                )
                 if self.wait_for_resume():
                     clear_request(self.workspace)
                     return RotationResult(

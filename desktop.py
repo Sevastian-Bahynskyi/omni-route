@@ -110,18 +110,48 @@ def claude_desktop_identity(user_data_dir: Path) -> Identity:
 
 
 def verify_claude_account(user_data_dir: Path, config_dir: Path) -> tuple[bool, str]:
-    """Confirm a desktop profile is the account its CLI profile claims."""
+    """Pre-flight: can this account run at all?
+
+    `CLAUDE_CONFIG_DIR` decides which account a Claude Code session runs as, so
+    the credential in that profile is what must be present before launching.
+    This is the Claude analogue of reading Codex's auth.json claims.
+
+    The desktop profile is deliberately not consulted here. Its
+    claude-code-sessions directory is a record of every account the profile has
+    ever run as, not a statement of which one is current, so reading it before a
+    launch produces a stale answer.
+    """
     expected = claude_cli_identity(config_dir)
-    actual = claude_desktop_identity(user_data_dir)
+    if not expected.known:
+        return False, f"no usable credential in {config_dir}: {expected.detail}"
+    if not Path(user_data_dir).is_dir():
+        return False, (
+            f"{user_data_dir} does not exist; sign this account in once with "
+            "`omni-rotate native signin`"
+        )
+    return True, expected.account or ""
+
+
+def confirm_claude_account(user_data_dir: Path, config_dir: Path,
+                           *, since: float) -> tuple[bool, str]:
+    """Post-launch: did a session actually come up as the expected account?
+
+    Proven by the account's own directory being created or touched after the
+    launch. Presence alone proves nothing, because a profile keeps the
+    directories of accounts it ran as previously.
+    """
+    expected = claude_cli_identity(config_dir)
     if not expected.known:
         return False, f"cannot determine expected account: {expected.detail}"
-    if not actual.known:
-        # A profile that has never run has no sessions directory. That is not a
-        # mismatch, but it is not a confirmation either.
-        return False, f"cannot confirm desktop account: {actual.detail}"
-    if expected.account != actual.account:
-        return False, f"wrong account: expected {expected.account}, found {actual.account}"
-    return True, actual.account
+    target = Path(user_data_dir) / "claude-code-sessions" / (expected.account or "")
+    if not target.is_dir():
+        return False, f"no session state for {expected.account} after launch"
+    if target.stat().st_mtime < since:
+        return False, (
+            f"session state for {expected.account} was not touched after launch; "
+            "the app may still be running as a different account"
+        )
+    return True, expected.account or ""
 
 
 # --------------------------------------------------------------------------

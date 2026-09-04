@@ -177,6 +177,7 @@ def main() -> int:
         test_stop_hook_fails_open_on_garbage,
         test_task_id_is_unique_per_workspace,
         test_claude_account_uuid_matches_cli_profile,
+        test_install_refuses_while_the_app_is_running,
     ]
     print(f"running {len(tests)} tests")
     for test in tests:
@@ -308,6 +309,29 @@ def test_claude_account_uuid_matches_cli_profile() -> None:
         print(f"  ok test_claude_account_uuid_matches_cli_profile ({checked} profile)")
     else:
         print("  skip test_claude_account_uuid_matches_cli_profile (no profile yet)")
+
+def test_install_refuses_while_the_app_is_running(monkeypatched=None) -> None:
+    """A write into a live task store is silently discarded, so refuse it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        udd = _fake_user_data_dir(base / "udd")
+        cfg = base / "cfg"
+        ws = _git_workspace(base / "ws")
+        original = ns._app_owns_store
+        ns._app_owns_store = lambda _p: True
+        try:
+            try:
+                ns.install(udd, ws, claude_config_dir=cfg)
+            except ns.SchedulerError as exc:
+                assert "stop it before" in str(exc)
+            else:
+                raise AssertionError("expected a refusal while the app is running")
+            # A dry run is still allowed: it writes nothing.
+            result = ns.install(udd, ws, claude_config_dir=cfg, dry_run=True)
+            assert "would be" in result["action"]
+        finally:
+            ns._app_owns_store = original
+    print("  ok test_install_refuses_while_the_app_is_running")
 
 
 if __name__ == "__main__":

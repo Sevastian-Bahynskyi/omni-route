@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,16 @@ def task_id_for(workspace: Path) -> str:
     resolved = str(Path(workspace).resolve())
     digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:8]
     return f"{TASK_PREFIX}-{digest}"
+
+
+def _app_owns_store(user_data_dir: Path) -> bool:
+    """True when Claude Desktop is running under this profile."""
+    # No leading "--": pgrep reads that as an option terminator.
+    result = subprocess.run(
+        ["pgrep", "-f", f"user-data-dir={Path(user_data_dir)}"],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
 
 
 class SchedulerError(RuntimeError):
@@ -296,6 +307,12 @@ def install(
 ) -> dict[str, Any]:
     """Install or update the rotation automation. Returns a result summary."""
     task_id = task_id or task_id_for(workspace)
+    if not dry_run and _app_owns_store(user_data_dir):
+        raise SchedulerError(
+            f"Claude Desktop is running under {user_data_dir}; stop it before "
+            "writing its task store. The app holds the task list in memory and "
+            "writes it back, so a write made now is silently discarded."
+        )
     if not dry_run:
         # Untrusted folders make scheduled sessions stall and report "Skipped".
         trust_workspace(workspace, claude_config_dir=claude_config_dir)
