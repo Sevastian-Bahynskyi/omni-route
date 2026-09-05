@@ -129,6 +129,21 @@ def verify_claude_account(user_data_dir: Path, config_dir: Path) -> tuple[bool, 
             f"{user_data_dir} does not exist; sign this account in once with "
             "`omni-rotate native signin`"
         )
+    account_state = (
+        Path(user_data_dir)
+        / "claude-code-sessions"
+        / (expected.account or "")
+    )
+    if not account_state.is_dir():
+        return False, (
+            f"desktop profile is not initialized for {expected.account}; "
+            "sign in, open the Code tab, and create one local routine"
+        )
+    if not any(account_state.glob("*/scheduled-tasks.json")):
+        return False, (
+            f"desktop profile has no task store for {expected.account}; "
+            "open Code > Routines and create one local routine"
+        )
     return True, expected.account or ""
 
 

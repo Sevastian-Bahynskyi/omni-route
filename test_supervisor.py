@@ -300,6 +300,12 @@ def test_preflight_checks_the_credential_not_the_profile_history() -> None:
             json.dumps({"oauthAccount": {"accountUuid": "uuid-A"}}), encoding="utf-8"
         )
         ok, detail = desktop.verify_claude_account(udd, cfg)
+        assert ok is False and "not initialized" in detail
+
+        store = udd / "claude-code-sessions" / "uuid-A" / "org-A" / "scheduled-tasks.json"
+        store.parent.mkdir(parents=True)
+        store.write_text(json.dumps({"scheduledTasks": []}), encoding="utf-8")
+        ok, detail = desktop.verify_claude_account(udd, cfg)
         assert ok is True and detail == "uuid-A"
 
         ok, detail = desktop.verify_claude_account(base / "missing", cfg)
