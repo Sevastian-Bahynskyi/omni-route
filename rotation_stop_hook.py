@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 REQUEST = "rotation-request.json"
@@ -48,7 +49,7 @@ Do these steps, in order, then stop:
        --goal '<the task>' --progress '<what is done>' \\
        --decisions '<important decisions>' --files '<changed/relevant files>' \\
        --status '<test and build status>' --blockers '<blockers, or none>' \\
-       --next-action '<the exact next action to take>'
+       --next-action '<the exact next action to take>'{session_argument}
    Keep each field short and concrete. The repository is the source of truth;
    the handoff is only a pointer.
 3. Stop. Do not start any new work.
@@ -96,9 +97,20 @@ def main() -> int:
         if phase == "prepare":
             message = PREPARE
         else:
+            session_id = os.environ.get("CODEX_THREAD_ID") or os.environ.get(
+                "CODEX_SESSION_ID", ""
+            )
+            try:
+                session_id = str(uuid.UUID(session_id)) if session_id else ""
+            except ValueError:
+                session_id = ""
+            session_argument = (
+                f" \\\n       --session-id {session_id}" if session_id else ""
+            )
             message = SWITCH.format(
                 tool=Path(__file__).with_name("handoff_cli.py"),
                 workspace=workspace,
+                session_argument=session_argument,
             )
         print(message, file=sys.stderr)
         return 2

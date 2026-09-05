@@ -62,11 +62,13 @@ run two sessions of the same provider on two accounts is rejected, not queued.
    restart is forced and recorded as *unclean*.
 3. **Swap.** The supervisor quits the desktop app, swaps the account
    (Codex: `auth.json`; Claude: `CLAUDE_CONFIG_DIR`), relaunches.
-4. **Resume.** A self-gating recurring automation already registered in that app
-   fires and continues the task in a fresh session.
+4. **Resume.** Claude uses its self-gating recurring automation. Codex-to-Codex
+   resumes the exact recorded thread; a cross-provider move into Codex starts
+   one continuation thread from the durable handoff.
 5. **Verify**, then mark the rotation successful.
 
-Same-provider rotation therefore preserves **the task**, not the transcript.
+Claude same-provider rotation preserves **the task**, not the transcript. Codex
+same-provider rotation now preserves both by resuming the recorded thread ID.
 See Amendments.
 
 ## 5. Handoff
@@ -78,10 +80,10 @@ Location: `.omni-route/handoff-<timestamp>.md` inside the workspace, git-ignored
 plus `handoff-latest.md` and a `handoff-pending` marker. Per-workspace, so
 multiple projects cannot collide.
 
-Contents: the seven fields from the direction document, **plus `worktree_path`
-and `branch`**. Those two are new and are required because Claude Desktop places
-each session in its own git worktree; without them the next provider cannot find
-the work.
+Contents: the seven fields from the direction document, plus `worktree_path`,
+`branch`, and the outgoing Codex `session_id` when one exists. The workspace and
+branch locate Claude worktrees; the session ID lets a Codex account resume the
+exact local thread after its credential changes.
 
 Delivery is **by pointer, not by paste**. The incoming agent is told to read the
 handoff and verify git state itself. The repository remains the source of truth.
@@ -546,7 +548,7 @@ Resume now requires **both** markers absent, which is the agent releasing its
 claim after finishing. An in-flight marker that never clears is a run that died
 holding the handoff: that times out and is retried rather than called a success.
 
-### Codex has no local automation store
+### Codex continuation uses its exact local thread
 
 Claude Desktop's scheduled tasks are file-registrable, which is what lets Omni
 Route install the self-gating rotation automation. Codex has no equivalent:
@@ -555,11 +557,21 @@ subcommand, the app-server protocol has no automation method, and ChatGPT.app's
 bundle carries no local automation keys. Codex automations appear to live
 server-side.
 
-Consequence: the Codex side of a rotation cannot self-gate the way Claude does,
-so Codex resume falls to the headless `codex exec` continuation, which is
-reported as **degraded** rather than clean. Codex-to-Codex rotation and the
-cross-provider handoff are therefore not yet proven, and the legacy Omnigent
-path stays in place until they are.
+Consequence: the Codex side cannot self-gate the way Claude does. Its fenced
+fallback now runs `codex exec resume <session-id>` for Codex-to-Codex rotation,
+preserving the exact thread, and plain `codex exec` only when entering Codex
+from Claude, where no Codex thread exists yet. Both remain reported as
+**degraded** because the continuation turn runs outside Desktop before control
+returns to the app.
+
+Live proof on 2026-09-05: thread
+`01a07233-102e-7762-b3e8-9f9fa8d8fa84` began under `codex-1`, the selected
+credential changed to `codex-2`, and the same thread recalled nonce
+`ORBIT-7419`. A separate no-session handoff into Codex created
+`cross-provider-proof.txt` with `CROSS-PROVIDER-OK` and released both handoff
+markers. `codex-1` was restored afterwards. These prove exact-session
+Codex-to-Codex continuation and semantic Claude-to-Codex continuation without
+changing the Omnigent mobile/dashboard compatibility path.
 
 ### `per_task_limit`
 

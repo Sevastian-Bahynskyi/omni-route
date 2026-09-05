@@ -20,6 +20,7 @@ def main() -> int:
     write.add_argument("--next-action", dest="next_action", default="")
     write.add_argument("--from-account", dest="from_account", default="")
     write.add_argument("--to-account", dest="to_account", default="")
+    write.add_argument("--session-id", dest="session_id", default="")
 
     show = sub.add_parser("show", help="print the latest handoff as JSON")
     show.add_argument("--workspace", default=".")
@@ -41,6 +42,7 @@ def main() -> int:
             next_action=args.next_action,
             from_account=args.from_account,
             to_account=args.to_account,
+            session_id=args.session_id,
         )
         path = handoff.write(workspace, record)
         print(f"handoff written: {path}")

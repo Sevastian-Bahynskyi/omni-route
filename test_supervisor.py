@@ -196,6 +196,53 @@ def test_rotation_falls_back_to_headless_and_reports_degraded() -> None:
     print("  ok test_rotation_falls_back_to_headless_and_reports_degraded")
 
 
+def test_codex_fallback_resumes_exact_session() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = _workspace(Path(tmp) / "ws")
+        handoff.write(ws, handoff.Handoff(goal="g", session_id="thread-123"))
+        profile = AccountProfile("codex-2", Path(tmp) / "auth.json", "codex")
+        commands: list[list[str]] = []
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            handoff.clear(ws)
+            return subprocess.CompletedProcess(command, 0)
+
+        original = subprocess.run
+        subprocess.run = run
+        try:
+            assert supervisor.Supervisor(ws, pool=_FakePool(None)).headless_continuation(profile)
+        finally:
+            subprocess.run = original
+        assert commands and commands[0][:4] == [
+            "codex", "exec", "resume", "thread-123"
+        ]
+    print("  ok test_codex_fallback_resumes_exact_session")
+
+
+def test_cross_provider_codex_fallback_starts_from_handoff() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = _workspace(Path(tmp) / "ws")
+        handoff.write(ws, handoff.Handoff(goal="from Claude"))
+        profile = AccountProfile("codex-2", Path(tmp) / "auth.json", "codex")
+        commands: list[list[str]] = []
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            handoff.clear(ws)
+            return subprocess.CompletedProcess(command, 0)
+
+        original = subprocess.run
+        subprocess.run = run
+        try:
+            assert supervisor.Supervisor(ws, pool=_FakePool(None)).headless_continuation(profile)
+        finally:
+            subprocess.run = original
+        assert commands and commands[0][:2] == ["codex", "exec"]
+        assert "resume" not in commands[0]
+    print("  ok test_cross_provider_codex_fallback_starts_from_handoff")
+
+
 def test_rotation_needs_user_action_when_everything_fails() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         ws = _workspace(Path(tmp) / "ws")
@@ -265,6 +312,8 @@ def main() -> int:
         test_rotation_stops_on_identity_mismatch,
         test_rotation_succeeds_and_reports_unclean_wrap_up,
         test_rotation_falls_back_to_headless_and_reports_degraded,
+        test_codex_fallback_resumes_exact_session,
+        test_cross_provider_codex_fallback_starts_from_handoff,
         test_rotation_needs_user_action_when_everything_fails,
         test_wait_for_resume_observes_the_marker,
         test_wait_for_resume_does_not_mistake_started_for_finished,

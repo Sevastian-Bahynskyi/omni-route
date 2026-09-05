@@ -54,6 +54,7 @@ class Handoff:
     commit: str = ""
     from_account: str = ""
     to_account: str = ""
+    session_id: str = ""
     created_at: int = field(default_factory=lambda: int(time.time()))
 
     def to_markdown(self) -> str:
@@ -63,6 +64,7 @@ class Handoff:
             "commit": self.commit,
             "from_account": self.from_account,
             "to_account": self.to_account,
+            "session_id": self.session_id,
             "created_at": self.created_at,
         }
         body = [

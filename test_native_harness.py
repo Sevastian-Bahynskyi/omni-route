@@ -36,6 +36,7 @@ def test_handoff_roundtrip() -> None:
             next_action="Run gate 6",
             from_account="claude-1",
             to_account="claude-3",
+            session_id="01a07233-102e-7762-b3e8-9f9fa8d8fa84",
         )
         path = handoff.write(ws, original)
         assert path.exists()
@@ -50,6 +51,7 @@ def test_handoff_roundtrip() -> None:
         assert restored.commit, "commit must be recorded"
         assert Path(restored.worktree_path).resolve() == ws.resolve()
         assert restored.to_account == "claude-3"
+        assert restored.session_id == original.session_id
 
         consumed = handoff.consume(ws)
         assert consumed is not None and consumed.goal == "Ship rotation"
@@ -173,6 +175,7 @@ def main() -> int:
         test_parses_the_real_store_if_present,
         test_stop_hook_is_silent_without_a_request,
         test_stop_hook_fires_once_per_generation,
+        test_stop_hook_carries_codex_thread_id,
         test_stop_hook_prepare_phase_differs,
         test_stop_hook_fails_open_on_garbage,
         test_task_id_is_unique_per_workspace,
@@ -187,11 +190,11 @@ def main() -> int:
 
 
 
-def _run_hook(workspace: Path) -> tuple[int, str]:
+def _run_hook(workspace: Path, **extra_env: str) -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).parent / "rotation_stop_hook.py")],
         input="{}", capture_output=True, text=True,
-        env={**os.environ, "CLAUDE_PROJECT_DIR": str(workspace)},
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(workspace), **extra_env},
         timeout=30,
     )
     return proc.returncode, proc.stderr
@@ -226,6 +229,19 @@ def test_stop_hook_fires_once_per_generation() -> None:
         code, _ = _run_hook(ws)
         assert code == 2
     print("  ok test_stop_hook_fires_once_per_generation")
+
+
+def test_stop_hook_carries_codex_thread_id() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = _git_workspace(Path(tmp) / "ws")
+        req = ws / ".omni-route" / "rotation-request.json"
+        req.parent.mkdir(parents=True, exist_ok=True)
+        req.write_text(json.dumps({"phase": "switch", "generation": 7}), encoding="utf-8")
+        thread_id = "01a07233-102e-7762-b3e8-9f9fa8d8fa84"
+        code, err = _run_hook(ws, CODEX_THREAD_ID=thread_id)
+        assert code == 2
+        assert f"--session-id {thread_id}" in err
+    print("  ok test_stop_hook_carries_codex_thread_id")
 
 
 def test_stop_hook_prepare_phase_differs() -> None:

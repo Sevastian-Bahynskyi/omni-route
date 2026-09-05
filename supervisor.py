@@ -306,15 +306,23 @@ class Supervisor:
                 command = ["claude", "-p", prompt, "--permission-mode", "acceptEdits"]
                 env = {"CLAUDE_CONFIG_DIR": str(env_dir)} if env_dir else {}
             else:
-                command = ["codex", "exec", prompt]
-                env = {}
+                record = handoff.read_latest(self.workspace)
+                if record is None:
+                    return False
+                command = ["codex", "exec"]
+                if record.session_id:
+                    command.extend(["resume", record.session_id])
+                command.append(prompt)
+                env = {"CODEX_HOME": str(Path.home() / ".codex")}
             import os
             merged = {**os.environ, **env}
             subprocess.run(command, cwd=str(self.workspace), env=merged,
                            capture_output=True, timeout=900, check=False)
         except (OSError, subprocess.SubprocessError) as exc:
             return False
-        return not handoff.is_pending(self.workspace)
+        return not handoff.is_pending(self.workspace) and not handoff.is_inflight(
+            self.workspace
+        )
 
     def rotate(self, *, reason: str = "threshold reached",
                exhausted: AccountProfile | None = None) -> RotationResult:

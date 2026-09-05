@@ -83,7 +83,9 @@ as unknown and never triggers a rotation.
    commits work in progress and writes a handoff.
 3. The supervisor selects the next account, stops the app, swaps the credential
    or profile, and restarts.
-4. A self-gating automation in the new account picks the handoff up and continues.
+4. Claude's self-gating automation picks the handoff up. Codex resumes the
+   recorded thread ID on a Codex-to-Codex switch, or starts one continuation
+   thread from the handoff when arriving from Claude.
 5. The rotation counts as successful only once the handoff marker is released --
    never because a schedule fired.
 
