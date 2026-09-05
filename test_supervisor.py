@@ -159,6 +159,7 @@ def test_rotation_succeeds_and_reports_unclean_wrap_up() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid"),
+            confirm_account=lambda _p, since: (True, "uuid"),
             start_provider=lambda _p: None,
             wait_for_resume=lambda **_k: True,
         )
@@ -180,6 +181,7 @@ def test_rotation_falls_back_to_headless_and_reports_degraded() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid"),
+            confirm_account=lambda _p, since: (True, "uuid"),
             start_provider=lambda p: launches.append(p.name),
             wait_for_resume=lambda **_k: False,       # app never starts a turn
             headless_continuation=lambda _p: True,
@@ -204,6 +206,7 @@ def test_rotation_needs_user_action_when_everything_fails() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid"),
+            confirm_account=lambda _p, since: (True, "uuid"),
             start_provider=lambda _p: None,
             wait_for_resume=lambda **_k: False,
             headless_continuation=lambda _p: False,
@@ -240,6 +243,7 @@ def main() -> int:
         test_wait_for_resume_observes_the_marker,
         test_confirm_requires_activity_after_launch,
         test_preflight_checks_the_credential_not_the_profile_history,
+        test_unconfirmed_account_is_never_a_success,
     ]
     print(f"running {len(tests)} supervisor tests")
     for test in tests:
@@ -301,6 +305,31 @@ def test_preflight_checks_the_credential_not_the_profile_history() -> None:
         ok, detail = desktop.verify_claude_account(base / "missing", cfg)
         assert ok is False and "signin" in detail
     print("  ok test_preflight_checks_the_credential_not_the_profile_history")
+
+def test_unconfirmed_account_is_never_a_success() -> None:
+    """The whole point of verification: never continue on the wrong account."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = _workspace(Path(tmp) / "ws")
+        profile = AccountProfile("claude-9", provider="claude", config_dir=Path(tmp) / "cfg")
+        sup = _supervisor_for(
+            ws, profile,
+            wait_for_handoff=lambda **_k: True,
+            stop_provider=lambda *_a: None,
+            prepare_account=lambda _p: None,
+            verify_account=lambda _p: (True, "uuid-A"),
+            confirm_account=lambda _p, since: (False, "running as uuid-B"),
+            start_provider=lambda _p: None,
+            # Even if the work visibly completed, an unconfirmed account must not
+            # be reported as a clean rotation.
+            wait_for_resume=lambda **_k: True,
+            headless_continuation=lambda _p: True,
+        )
+        result = sup.rotate()
+        assert result.outcome is supervisor.Outcome.NEEDS_USER_ACTION, (
+            f"unconfirmed account must stop, got {result.outcome}"
+        )
+        assert "wrong account" in result.detail
+    print("  ok test_unconfirmed_account_is_never_a_success")
 
 
 if __name__ == "__main__":

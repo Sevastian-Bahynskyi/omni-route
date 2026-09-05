@@ -220,6 +220,20 @@ def write_skill(
     return path
 
 
+def account_uuid_for(claude_config_dir: Path | None) -> str | None:
+    """The account uuid a CLAUDE_CONFIG_DIR profile is authenticated as."""
+    if claude_config_dir is None:
+        return None
+    try:
+        data = json.loads(
+            (Path(claude_config_dir) / ".claude.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = (data.get("oauthAccount") or {}).get("accountUuid")
+    return value if isinstance(value, str) and value else None
+
+
 def find_store(user_data_dir: Path, account_uuid: str | None = None) -> TaskStore:
     """Locate the scheduled-task metadata file for an account.
 
@@ -318,6 +332,9 @@ def install(
         trust_workspace(workspace, claude_config_dir=claude_config_dir)
         # A session with no permissions stalls on its first tool call.
         ensure_unattended_settings(claude_config_dir)
+    # Target the partition of the account that will actually run, not
+    # whichever is newest: a profile keeps one per account it has run as.
+    account_uuid = account_uuid or account_uuid_for(claude_config_dir)
     store = find_store(Path(user_data_dir), account_uuid)
     data = load_store(store)
     skill_file = write_skill(
@@ -363,11 +380,15 @@ def remove(
     account_uuid: str | None = None,
     task_id: str | None = None,
     workspace: Path | None = None,
+    claude_config_dir: Path | None = None,
 ) -> bool:
     if task_id is None:
         if workspace is None:
             raise SchedulerError("remove() needs either task_id or workspace")
         task_id = task_id_for(workspace)
+    # Target the partition of the account that will actually run, not
+    # whichever is newest: a profile keeps one per account it has run as.
+    account_uuid = account_uuid or account_uuid_for(claude_config_dir)
     store = find_store(Path(user_data_dir), account_uuid)
     data = load_store(store)
     tasks = data["scheduledTasks"]

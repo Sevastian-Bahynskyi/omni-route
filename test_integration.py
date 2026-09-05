@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+# omni-route: skip when the legacy runtime is absent. These cover the
+# Omnigent-coupled path; test_routing_native.py covers the same routing
+# behaviour without fastapi.
+import importlib.util as _importlib_util
+import sys as _sys
+
+if _importlib_util.find_spec("fastapi") is None:
+    print("skipped: fastapi is not installed; the legacy path is not present")
+    _sys.exit(0)
+
+
 import importlib
 import json
 import shutil

@@ -369,10 +369,15 @@ class Supervisor:
                     continue
                 events.append(f"launched {nxt.provider} (attempt {attempt})")
                 confirmed, confirm_detail = self.confirm_account(nxt, since=launched_at)
-                events.append(
-                    f"account confirmed ({confirm_detail})" if confirmed
-                    else f"account not yet confirmed: {confirm_detail}"
-                )
+                if not confirmed:
+                    # Never treat an unconfirmed account as a success. Work that
+                    # continues on the wrong account is the failure this whole
+                    # sequence exists to prevent, and it is invisible unless the
+                    # rotation refuses it here.
+                    events.append(f"account NOT confirmed: {confirm_detail}")
+                    self.stop_provider(nxt)
+                    continue
+                events.append(f"account confirmed ({confirm_detail})")
                 if self.wait_for_resume():
                     clear_request(self.workspace)
                     return RotationResult(
@@ -382,6 +387,16 @@ class Supervisor:
                     )
                 events.append(f"no resume after attempt {attempt}")
                 self.stop_provider(nxt)
+
+            if any("NOT confirmed" in event for event in events):
+                clear_request(self.workspace)
+                return RotationResult(
+                    Outcome.NEEDS_USER_ACTION,
+                    f"{nxt.name} did not come up as the expected account; "
+                    "refusing to continue on the wrong account",
+                    from_account=current.name if current else None,
+                    to_account=nxt.name, unclean=True, events=events,
+                )
 
             events.append("restarts exhausted; running one headless continuation")
             if self.headless_continuation(nxt):
