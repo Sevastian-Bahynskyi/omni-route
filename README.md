@@ -39,16 +39,78 @@ into every isolated Claude profile, making workflow commands such as
 `/implement` available under each subscription account.
 Use a current Claude Code release. Normal CLI logins remain unchanged.
 
+## Native desktop path
+
+Omni Route now supervises the **native desktop apps** rather than replacing them:
+Codex runs in ChatGPT.app and Claude in Claude Desktop, with their own skills,
+plugins, browser and remote control intact. Omni Route manages accounts, quota,
+rotation and the dashboard, and nothing else.
+
+```bash
+omni-rotate start               # launch the selected account and supervise it
+omni-rotate native doctor       # check the native path end to end
+omni-rotate native usage        # live quota for every account
+omni-rotate native threshold 90 # set the switch threshold (maximum 95)
+omni-rotate native rotate       # rotate accounts now
+omni-rotate native signin NAME  # open an account profile to sign in
+omni-rotate native status       # routing status as JSON
+```
+
+Each Claude account needs a one-time sign-in in its own desktop profile, because
+Claude Desktop keeps its account in its Electron user-data directory rather than
+in `CLAUDE_CONFIG_DIR`. `omni-rotate native signin <account>` opens that profile;
+a new profile always starts signed out, which is expected. An account already
+signed into the app's default profile can point at it with
+`desktop_user_data_dir` in the pool config instead of being signed in twice.
+
+Codex accounts need no sign-in: the account follows `auth.json` in the shared
+`CODEX_HOME`, so rotation swaps the credential and leaves every session in place.
+
+### Thresholds
+
+The switch threshold is set from the dashboard or the CLI and **cannot exceed
+95%**. Preparation always begins 3 percentage points earlier: at 95% the agent is
+told to wind down at 92%, and rotation happens at 95%. The 5-hour window is the
+primary signal; the weekly window also trips the threshold so a week-long
+exhaustion cannot strand a session. A quota reading that cannot be taken counts
+as unknown and never triggers a rotation.
+
+### How a rotation works
+
+1. At the preparation threshold the agent is told to finish its current unit and
+   start nothing long.
+2. At the switch threshold a `Stop` hook fires at a real turn boundary: the agent
+   commits work in progress and writes a handoff.
+3. The supervisor selects the next account, stops the app, swaps the credential
+   or profile, and restarts.
+4. A self-gating automation in the new account picks the handoff up and continues.
+5. The rotation counts as successful only once the handoff marker is released --
+   never because a schedule fired.
+
+Wrong-account, missing-session, exhausted-pool and login-required cases stop
+visibly instead of continuing silently.
+
+## Legacy Omnigent path
+
+The original Omnigent-routed path is still available while the native path
+finishes proving itself:
+
+```bash
+omni-rotate omnigent    # start the legacy Omnigent-routed session
+omni-rotate legacy-test # the old diagnostics
+omni-rotate sessions    # import/re-sync Codex + Claude local history
+```
+
 ## Commands
 
 Installation adds `omni-rotate` to PATH:
 
 ```bash
-omni-rotate start       # start the routed session
-omni-rotate test        # full diagnostics
+omni-rotate start       # start the routed session in the native desktop apps
+omni-rotate native ...  # native controls (see above)
+omni-rotate test        # check the native path
 omni-rotate status      # open the local control dashboard
 omni-rotate accounts    # add/configure subscriptions
-omni-rotate sessions    # import/re-sync Codex + Claude local history
 omni-rotate help
 ```
 

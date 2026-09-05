@@ -21,3 +21,22 @@ Full macOS cleanup: uninstall_all.sh
 Routed start selector: routed_start.py
 Claude lifecycle integration: payload/claude_account_integration.py
 Regression suites: test_routing.py, test_setup.py, test_dashboard.py, test_integration.py
+
+Native harness (desktop-first path)
+Execution: native Codex Desktop (ChatGPT.app) + native Claude Desktop; Omni Route supervises only
+Account pool (vendored, no Omnigent): account_pool.py
+Quota reader: quota.py (Codex app-server JSON-RPC; Claude /usage scrape, failure = unknown)
+App-server client: codex_app_client.py
+Desktop lifecycle + identity: desktop.py
+Supervisor: supervisor.py (threshold, lockfile, rotate, verify, resume)
+Handoff: handoff.py, handoff_cli.py (claim-then-release marker)
+Rotation Stop hook: rotation_stop_hook.py (exit 2 + stderr, marker-guarded, fails open)
+Automation writer: native_scheduler.py (SKILL.md + scheduled-tasks.json, per-account partition)
+Native CLI: omni_route_cli.py (start | status | rotate | usage | threshold | doctor | signin)
+Per-account profile launcher: launch_claude_profile.sh (open -n, verifies the flag took)
+Profile check: verify_profile.py
+Gate runner: gate6.py
+Thresholds: dashboard-settable, hard maximum 95%, preparation = switch - 3 points
+Isolation: Codex via shared CODEX_HOME + swapped auth.json; Claude via per-account --user-data-dir
+Native tests: test_native_harness.py, test_supervisor.py, test_routing_native.py
+Decisions record: NATIVE_HARNESS_DECISIONS.md

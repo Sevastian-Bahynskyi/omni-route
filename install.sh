@@ -146,6 +146,17 @@ cp "${HERE}/dashboard.html" "${BASE}/dashboard.html"
 cp "${HERE}/switch_provider.py" "${BASE}/switch_provider.py"
 cp "${HERE}/routed_start.py" "${BASE}/routed_start.py"
 cp "${HERE}/import_sessions.py" "${BASE}/import_sessions.py"
+
+# Native harness: the desktop-first path. These have no Omnigent dependency.
+for native_module in \
+  account_pool.py quota.py desktop.py handoff.py handoff_cli.py \
+  native_scheduler.py codex_app_client.py supervisor.py \
+  rotation_stop_hook.py omni_route_cli.py verify_profile.py; do
+  cp "${HERE}/${native_module}" "${BASE}/${native_module}"
+done
+chmod +x "${BASE}/rotation_stop_hook.py" "${BASE}/handoff_cli.py" "${BASE}/omni_route_cli.py"
+cp "${HERE}/launch_claude_profile.sh" "${BASE}/launch_claude_profile.sh"
+chmod +x "${BASE}/launch_claude_profile.sh"
 chmod 700 \
   "${BASE}/configure_subscriptions.py" \
   "${BASE}/diagnose.py" \
