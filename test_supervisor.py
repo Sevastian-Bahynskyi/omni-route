@@ -159,7 +159,7 @@ def test_rotation_succeeds_and_reports_unclean_wrap_up() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid"),
-            confirm_account=lambda _p, since: (True, "uuid"),
+            confirm_account=lambda _p, **_k: (True, "uuid"),
             start_provider=lambda _p: None,
             wait_for_resume=lambda **_k: True,
         )
@@ -181,7 +181,7 @@ def test_rotation_falls_back_to_headless_and_reports_degraded() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid"),
-            confirm_account=lambda _p, since: (True, "uuid"),
+            confirm_account=lambda _p, **_k: (True, "uuid"),
             start_provider=lambda p: launches.append(p.name),
             wait_for_resume=lambda **_k: False,       # app never starts a turn
             headless_continuation=lambda _p: True,
@@ -206,7 +206,7 @@ def test_rotation_needs_user_action_when_everything_fails() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid"),
-            confirm_account=lambda _p, since: (True, "uuid"),
+            confirm_account=lambda _p, **_k: (True, "uuid"),
             start_provider=lambda _p: None,
             wait_for_resume=lambda **_k: False,
             headless_continuation=lambda _p: False,
@@ -228,6 +228,32 @@ def test_wait_for_resume_observes_the_marker() -> None:
     print("  ok test_wait_for_resume_observes_the_marker")
 
 
+def test_wait_for_resume_does_not_mistake_started_for_finished() -> None:
+    """Claiming the handoff is the start of the work, not the end.
+
+    The incoming agent renames handoff-pending to handoff-inflight before it
+    begins. Treating that as completion reported rotations "ok" while the new
+    account was still working, with none of the handoff's work done.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = _workspace(Path(tmp) / "ws")
+        sup = supervisor.Supervisor(ws, pool=_FakePool(None), sleep=lambda _s: None)
+        handoff.write(ws, handoff.Handoff(goal="g"))
+
+        # The agent claims the handoff and starts working.
+        root = handoff.directory(ws)
+        (root / handoff.PENDING).replace(root / handoff.INFLIGHT)
+        assert handoff.is_pending(ws) is False
+        assert sup.wait_for_resume(timeout=0.3) is False, (
+            "work in flight must not count as a finished resume"
+        )
+
+        # Only releasing the claim means finished.
+        (root / handoff.INFLIGHT).unlink()
+        assert sup.wait_for_resume(timeout=0.3) is True
+    print("  ok test_wait_for_resume_does_not_mistake_started_for_finished")
+
+
 def main() -> int:
     tests = [
         test_threshold_clamping_and_preparation,
@@ -241,7 +267,11 @@ def main() -> int:
         test_rotation_falls_back_to_headless_and_reports_degraded,
         test_rotation_needs_user_action_when_everything_fails,
         test_wait_for_resume_observes_the_marker,
-        test_confirm_requires_activity_after_launch,
+        test_wait_for_resume_does_not_mistake_started_for_finished,
+        test_confirm_reads_the_account_the_app_declared,
+        test_confirm_ignores_declarations_from_before_the_launch,
+        test_confirm_detects_a_genuine_wrong_account,
+        test_confirm_waits_instead_of_failing_immediately,
         test_preflight_checks_the_credential_not_the_profile_history,
         test_unconfirmed_account_is_never_a_success,
     ]
@@ -251,40 +281,123 @@ def main() -> int:
     print("all passed")
     return 0
 
-def test_confirm_requires_activity_after_launch() -> None:
-    """Presence of account state proves nothing; it must be touched after launch.
+UUID_A = "1c7a389f-8d9c-41aa-b056-16a7f747d475"
+UUID_B = "820bf123-1a91-4c26-8f03-a51513ac43bc"
 
-    A desktop profile keeps a directory for every account it has ever run as, so
-    reading that directory as identity would accept a stale account.
+
+def _log_line(uuid: str) -> str:
+    return (
+        "2026-09-05 17:08:57 [info] [CCDScheduledTasks] Initialized "
+        f"{{ accountId: '{uuid}', orgId: '0808858f' }}\n"
+    )
+
+
+def _confirm_fixture(base: Path, uuid: str = UUID_A) -> tuple[Path, Path, Path]:
+    cfg = base / "cfg"
+    cfg.mkdir(exist_ok=True)
+    (cfg / ".claude.json").write_text(
+        json.dumps({"oauthAccount": {"accountUuid": uuid}}), encoding="utf-8"
+    )
+    udd = base / "udd"
+    udd.mkdir(exist_ok=True)
+    log = base / "main.log"
+    log.write_text("older content that predates the launch\n", encoding="utf-8")
+    return cfg, udd, log
+
+
+def test_confirm_reads_the_account_the_app_declared() -> None:
+    """Confirmation comes from the app's own startup declaration.
+
+    The app initialises an account without touching that account's session
+    directory, so file mtimes report nothing for minutes. Only the log says
+    which account actually loaded.
     """
     import desktop
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
-        cfg = base / "cfg"
-        cfg.mkdir()
-        (cfg / ".claude.json").write_text(
-            json.dumps({"oauthAccount": {"accountUuid": "uuid-A"}}), encoding="utf-8"
+        cfg, udd, log = _confirm_fixture(base)
+        position = desktop.claude_log_position(log)
+
+        # Nothing written yet: unconfirmed, not a mismatch.
+        ok, detail = desktop.confirm_claude_account(
+            udd, cfg, since_position=position, timeout=0, log_path=log,
+            sleep=lambda _s: None,
         )
-        udd = base / "udd"
-        stale = udd / "claude-code-sessions" / "uuid-A"
-        stale.mkdir(parents=True)
+        assert ok is False and "did not report an account" in detail
 
-        launch = time.time() + 5  # nothing has happened since this moment
-        ok, detail = desktop.confirm_claude_account(udd, cfg, since=launch)
-        assert ok is False and "not touched after launch" in detail
-
-        # Touching it after the launch is the proof.
-        stale.touch()
-        ok, detail = desktop.confirm_claude_account(udd, cfg, since=time.time() - 5)
-        assert ok is True and detail == "uuid-A"
-
-        # A different account never satisfies the check.
-        (cfg / ".claude.json").write_text(
-            json.dumps({"oauthAccount": {"accountUuid": "uuid-B"}}), encoding="utf-8"
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(_log_line(UUID_A))
+        ok, detail = desktop.confirm_claude_account(
+            udd, cfg, since_position=position, timeout=0, log_path=log,
+            sleep=lambda _s: None,
         )
-        ok, detail = desktop.confirm_claude_account(udd, cfg, since=time.time() - 5)
-        assert ok is False and "no session state for uuid-B" in detail
-    print("  ok test_confirm_requires_activity_after_launch")
+        assert ok is True and detail == UUID_A
+    print("  ok test_confirm_reads_the_account_the_app_declared")
+
+
+def test_confirm_ignores_declarations_from_before_the_launch() -> None:
+    """A previous run's account must not confirm this launch."""
+    import desktop
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        cfg, udd, log = _confirm_fixture(base)
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(_log_line(UUID_A))
+        # The launch happens after that line was already in the log.
+        position = desktop.claude_log_position(log)
+        ok, detail = desktop.confirm_claude_account(
+            udd, cfg, since_position=position, timeout=0, log_path=log,
+            sleep=lambda _s: None,
+        )
+        assert ok is False, "a stale declaration must not confirm a new launch"
+        assert "did not report an account" in detail
+    print("  ok test_confirm_ignores_declarations_from_before_the_launch")
+
+
+def test_confirm_detects_a_genuine_wrong_account() -> None:
+    import desktop
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        cfg, udd, log = _confirm_fixture(base, uuid=UUID_A)
+        position = desktop.claude_log_position(log)
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(_log_line(UUID_B))
+        ok, detail = desktop.confirm_claude_account(
+            udd, cfg, since_position=position, timeout=30, log_path=log,
+            sleep=lambda _s: None,
+        )
+        assert ok is False
+        assert "wrong account" in detail and UUID_B in detail
+    print("  ok test_confirm_detects_a_genuine_wrong_account")
+
+
+def test_confirm_waits_instead_of_failing_immediately() -> None:
+    """The regression that made every rotation look like a wrong account.
+
+    The process exists about a tenth of a second after launch; the account is
+    declared seconds later. Confirming without waiting therefore always failed.
+    """
+    import desktop
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        cfg, udd, log = _confirm_fixture(base)
+        position = desktop.claude_log_position(log)
+
+        ticks: list[float] = []
+
+        def slow_boot(seconds: float) -> None:
+            ticks.append(seconds)
+            if len(ticks) == 3:  # the app finishes booting mid-wait
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write(_log_line(UUID_A))
+
+        ok, detail = desktop.confirm_claude_account(
+            udd, cfg, since_position=position, timeout=60, log_path=log,
+            sleep=slow_boot,
+        )
+        assert ok is True and detail == UUID_A
+        assert ticks, "confirmation must wait for the app rather than fail at once"
+    print("  ok test_confirm_waits_instead_of_failing_immediately")
 
 
 def test_preflight_checks_the_credential_not_the_profile_history() -> None:
@@ -323,7 +436,7 @@ def test_unconfirmed_account_is_never_a_success() -> None:
             stop_provider=lambda *_a: None,
             prepare_account=lambda _p: None,
             verify_account=lambda _p: (True, "uuid-A"),
-            confirm_account=lambda _p, since: (False, "running as uuid-B"),
+            confirm_account=lambda _p, **_k: (False, "running as uuid-B"),
             start_provider=lambda _p: None,
             # Even if the work visibly completed, an unconfirmed account must not
             # be reported as a clean rotation.

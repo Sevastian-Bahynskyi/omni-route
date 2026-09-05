@@ -209,14 +209,23 @@ class Supervisor:
         return False
 
     def wait_for_resume(self, *, timeout: float = RESUME_TIMEOUT) -> bool:
-        """Wait for evidence that the new account actually picked the work up.
+        """Wait for evidence that the new account actually finished the work.
 
-        The marker is released only by a run that finished, so this observes the
-        effect of the resume rather than the fact that a task was dispatched.
+        Both markers must be gone. The incoming agent claims the handoff by
+        renaming `handoff-pending` to `handoff-inflight` before it starts, so the
+        pending marker disappearing means the work has *begun*, not that it is
+        done. Waiting on that alone reports a rotation complete while the new
+        account is still working, which is how a rotation came back "ok" with
+        none of the handoff's work performed.
+
+        An in-flight marker that never clears is a run that died holding the
+        handoff; that times out here and is retried rather than called a success.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if not handoff.is_pending(self.workspace):
+            if not handoff.is_pending(self.workspace) and not handoff.is_inflight(
+                self.workspace
+            ):
                 return True
             self._sleep(5)
         return False
@@ -249,8 +258,15 @@ class Supervisor:
             desktop.claude_user_data_dir(profile), profile.config_dir or Path()
         )
 
-    def confirm_account(self, profile: AccountProfile, *, since: float) -> tuple[bool, str]:
-        """Confirm after launch that the app really came up on this account."""
+    def confirm_account(self, profile: AccountProfile, *,
+                        since_position: int = 0) -> tuple[bool, str]:
+        """Confirm after launch that the app really came up on this account.
+
+        Codex resolves its account from the credential the supervisor just
+        installed, so reading it back is immediate. Claude has to be waited for:
+        the app declares its account in its log a few seconds after the process
+        appears, and `since_position` is where that log ended before the launch.
+        """
         if profile.provider == "codex":
             identity = desktop.codex_identity(profile.auth_json) if profile.auth_json else None
             if identity is None or not identity.known:
@@ -258,7 +274,7 @@ class Supervisor:
             return True, identity.account or ""
         return desktop.confirm_claude_account(
             desktop.claude_user_data_dir(profile), profile.config_dir or Path(),
-            since=since,
+            since_position=since_position,
         )
 
     def start_provider(self, profile: AccountProfile) -> None:
@@ -361,14 +377,18 @@ class Supervisor:
             events.append(f"pre-flight identity ok ({detail})")
 
             for attempt in range(1, RESTART_ATTEMPTS + 1):
-                launched_at = time.time()
+                # Captured before the launch so the confirmation reads only what
+                # this launch wrote to the app's log.
+                log_position = desktop.claude_log_position()
                 try:
                     self.start_provider(nxt)
                 except desktop.DesktopError as exc:
                     events.append(f"launch attempt {attempt} failed: {exc}")
                     continue
                 events.append(f"launched {nxt.provider} (attempt {attempt})")
-                confirmed, confirm_detail = self.confirm_account(nxt, since=launched_at)
+                confirmed, confirm_detail = self.confirm_account(
+                    nxt, since_position=log_position
+                )
                 if not confirmed:
                     # Never treat an unconfirmed account as a success. Work that
                     # continues on the wrong account is the failure this whole

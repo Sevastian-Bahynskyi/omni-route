@@ -409,10 +409,37 @@ label cannot distinguish "ran" from "stalled" from "never started". Rotation mus
 verify the *effect* of a resume — the handoff marker released, the work visible
 in git — and must never report success because a schedule fired.
 
-### Gate 6 (switch half) — not yet run
+### Gate 6 (switch half) — **PASS**
 
-Quota detection -> wrap-up -> account swap -> resume, as one unattended loop.
-Needs the supervisor.
+A full unattended rotation, `claude-1 -> claude-3`, driven entirely by the
+supervisor:
+
+```
+armed switch request
+handoff written
+selected claude-3
+stopped previous and incoming apps
+pre-flight identity ok (820bf123-…)
+launched claude (attempt 1)
+account confirmed (820bf123-…)
+-> outcome "ok", resumed on claude-3, unclean false, 207s
+```
+
+Verified independently of the supervisor's own report: the handoff's requested
+file was written with the exact expected contents, and both markers were
+released. Nobody touched the machine during the rotation.
+
+Two supervisor bugs had to be fixed first, and both were false reports rather
+than broken mechanism — the rotation itself had been working:
+
+* confirmation read a filesystem signal the app never produces (see
+  *Confirmation must read the app's declaration*);
+* resume treated a claimed handoff as a finished one (see *A claimed handoff is
+  not a finished handoff*).
+
+Claude-to-Claude rotation is therefore proven end to end. Codex-to-Codex and
+cross-provider rotation remain unproven; see *Codex has no local automation
+store*.
 
 ### Sign-in findings (from a remote-controlled run)
 
@@ -476,6 +503,63 @@ Two consequences, both now enforced:
   incoming account. Stopping only the outgoing one is not enough -- the incoming
   account's app is often already running, and Claude Desktop's default profile
   usually is.
+
+### Confirmation must read the app's declaration, not the filesystem
+
+Post-launch confirmation originally required the expected account's session
+directory to be touched after the launch. Measuring the real sequence showed why
+that can never work:
+
+* the process matches `pgrep` **0.1s** after `open -n` returns;
+* the account is declared in the app's log about **20s** later;
+* the account's session directory is **not touched at all** — still untouched
+  after 120s of waiting.
+
+So the check ran before anything could have happened, against a signal the app
+does not produce. Every rotation failed confirmation and was reported as a
+wrong-account rotation while the correct account was in fact running.
+
+The app states its account on startup, in `~/Library/Logs/Claude/main.log`:
+
+```
+[CCDScheduledTasks] Initialized { accountId: '<uuid>', orgId: ... }
+```
+
+That line is the confirmation. It is read from a **byte offset captured before
+the launch**, not by timestamp: the log records whole seconds and cannot
+separate a line written just before a launch from one written just after. A
+different account in that window is a mismatch and fails immediately; no account
+within the timeout is unconfirmed and also fails. Both stop the rotation.
+
+There is no per-profile app log — the single `main.log` carries every profile's
+lines — which is workable because rotation stops all apps before launching one.
+
+### A claimed handoff is not a finished handoff
+
+`wait_for_resume` waited for `handoff-pending` to disappear. The incoming agent
+renames that marker to `handoff-inflight` *before* it starts work, so the
+supervisor returned success the moment the new account picked the task up. A
+live rotation reported `"outcome": "ok"` with none of the handoff's work done;
+the file it was asked to write appeared afterwards.
+
+Resume now requires **both** markers absent, which is the agent releasing its
+claim after finishing. An in-flight marker that never clears is a run that died
+holding the handoff: that times out and is retried rather than called a success.
+
+### Codex has no local automation store
+
+Claude Desktop's scheduled tasks are file-registrable, which is what lets Omni
+Route install the self-gating rotation automation. Codex has no equivalent:
+`~/.codex/automations` exists but is empty, the CLI exposes no automation
+subcommand, the app-server protocol has no automation method, and ChatGPT.app's
+bundle carries no local automation keys. Codex automations appear to live
+server-side.
+
+Consequence: the Codex side of a rotation cannot self-gate the way Claude does,
+so Codex resume falls to the headless `codex exec` continuation, which is
+reported as **degraded** rather than clean. Codex-to-Codex rotation and the
+cross-provider handoff are therefore not yet proven, and the legacy Omnigent
+path stays in place until they are.
 
 ### `per_task_limit`
 

@@ -13,16 +13,24 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 CLAUDE_APP = Path("/Applications/Claude.app")
 CLAUDE_BIN = CLAUDE_APP / "Contents" / "MacOS" / "Claude"
 CODEX_APP = Path("/Applications/ChatGPT.app")
 DESKTOP_ROOT = Path.home() / ".omnigent" / "claude-desktop"
+CLAUDE_LOG = Path.home() / "Library" / "Logs" / "Claude" / "main.log"
 LAUNCH_TIMEOUT = 45.0
+# How long to wait for the app to declare its account after launch. Measured
+# boot-to-declaration is a few seconds; the margin covers a cold start.
+CONFIRM_TIMEOUT = 120.0
+
+_ACCOUNT_LINE = re.compile(r"Initialized \{ accountId: '([0-9a-fA-F-]{36})'")
 
 
 class DesktopError(RuntimeError):
@@ -147,26 +155,81 @@ def verify_claude_account(user_data_dir: Path, config_dir: Path) -> tuple[bool, 
     return True, expected.account or ""
 
 
-def confirm_claude_account(user_data_dir: Path, config_dir: Path,
-                           *, since: float) -> tuple[bool, str]:
-    """Post-launch: did a session actually come up as the expected account?
+def claude_log_position(log_path: Path = CLAUDE_LOG) -> int:
+    """Current end of the desktop app's log.
 
-    Proven by the account's own directory being created or touched after the
-    launch. Presence alone proves nothing, because a profile keeps the
-    directories of accounts it ran as previously.
+    Captured before a launch so the confirmation that follows reads only what
+    that launch wrote. A byte offset is used rather than a timestamp because the
+    log records whole seconds, which cannot separate a line written just before
+    a launch from one written just after.
+    """
+    try:
+        return log_path.stat().st_size
+    except OSError:
+        return 0
+
+
+def claude_logged_accounts(since_position: int,
+                           log_path: Path = CLAUDE_LOG) -> list[str]:
+    """Accounts the app reported initialising, in order, after `since_position`.
+
+    On startup the app writes its account into the log:
+
+        [CCDScheduledTasks] Initialized { accountId: '<uuid>', orgId: ... }
+
+    That is the app stating which account it loaded, which is what rotation
+    needs to confirm. It is read from the log rather than from disk state
+    because the app initialises an account without touching that account's
+    session directory, so file mtimes report nothing for minutes.
+    """
+    try:
+        size = log_path.stat().st_size
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            # A rotated or truncated log invalidates the offset; read it whole.
+            handle.seek(0 if size < since_position else since_position)
+            text = handle.read()
+    except OSError:
+        return []
+    return _ACCOUNT_LINE.findall(text)
+
+
+def confirm_claude_account(user_data_dir: Path, config_dir: Path, *,
+                           since_position: int,
+                           timeout: float = CONFIRM_TIMEOUT,
+                           log_path: Path = CLAUDE_LOG,
+                           sleep: Callable[[float], None] = time.sleep,
+                           ) -> tuple[bool, str]:
+    """Post-launch: did the app actually come up as the expected account?
+
+    Waits for the app to declare an account, because a launched process is not
+    yet a loaded account: the process exists within a tenth of a second, while
+    the account appears seconds later. Confirming immediately therefore fails
+    every time, which reads as a wrong-account rotation when nothing is wrong.
+
+    An account other than the expected one is a mismatch and fails at once; no
+    account within the timeout is unconfirmed, which is also a failure. Both
+    stop the rotation rather than continuing on an unverified account.
     """
     expected = claude_cli_identity(config_dir)
     if not expected.known:
         return False, f"cannot determine expected account: {expected.detail}"
-    target = Path(user_data_dir) / "claude-code-sessions" / (expected.account or "")
-    if not target.is_dir():
-        return False, f"no session state for {expected.account} after launch"
-    if target.stat().st_mtime < since:
-        return False, (
-            f"session state for {expected.account} was not touched after launch; "
-            "the app may still be running as a different account"
-        )
-    return True, expected.account or ""
+
+    deadline = time.monotonic() + timeout
+    while True:
+        seen = claude_logged_accounts(since_position, log_path)
+        if expected.account in seen:
+            return True, expected.account or ""
+        if seen:
+            return False, (
+                f"wrong account: expected {expected.account}, "
+                f"the app started as {seen[-1]}"
+            )
+        if time.monotonic() >= deadline:
+            return False, (
+                f"the app did not report an account within {timeout:g}s; "
+                f"cannot confirm it is running as {expected.account}"
+            )
+        sleep(2)
 
 
 # --------------------------------------------------------------------------
