@@ -2,6 +2,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import threading
@@ -12,6 +13,14 @@ from unittest.mock import patch
 
 import status_server as base
 import status_server_ext as dashboard
+
+
+class DashboardMarkupTests(unittest.TestCase):
+    def test_every_render_target_exists(self) -> None:
+        html = Path(__file__).with_name("dashboard.html").read_text()
+        referenced = set(re.findall(r"\$\('([^']+)'\)", html))
+        declared = set(re.findall(r'\bid="([^"]+)"', html))
+        self.assertEqual(referenced - declared, set())
 
 
 class DashboardTests(unittest.TestCase):
